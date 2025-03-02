@@ -1,0 +1,186 @@
+# Printer Monitoring System Documentation
+
+## System Overview
+
+This document provides an overview of the Printer Monitoring System, which consists of:
+
+1. **Agent Component**: Lightweight software deployed at customer locations to collect printer data
+2. **Central Server**: Backend API and database to store and process data
+3. **Web Frontend**: User interface for monitoring and management
+
+## Agent Component
+
+The Agent is designed to run on customer premises and perform the following functions:
+
+- Discover printers on the network via SNMP
+- Collect printer metrics at regular intervals
+- Store serial numbers and printer data locally
+- Sync data with the central server
+- Work offline when connectivity is unavailable
+
+### Agent Deployment Options
+
+#### 1. Software-only Deployment
+- Install on existing Windows/Linux servers or workstations
+- Minimal resource requirements
+- Python-based application
+
+#### 2. Raspberry Pi Deployment
+- Cost-effective dedicated hardware (Raspberry Pi Zero W 2 or Raspberry Pi 4)
+- Small form factor
+- Pre-configured with Docker
+- Easy installation
+
+### Agent Requirements
+
+- Network access to printers (SNMP)
+- Internet connectivity to central server (can operate offline temporarily)
+- Python 3.6+ (for software deployment)
+- Docker (for container deployment)
+
+### Agent Configuration
+
+The agent is configured using a `config.ini` file with the following sections:
+
+```ini
+[agent]
+id = unique_agent_id
+name = Customer Site Name
+polling_interval = 300
+discovery_interval = 86400
+data_dir = ./data
+
+[server]
+url = https://your-server-url.com/api
+token = your_api_token
+
+[network]
+subnets = ["192.168.1.0/24", "10.0.0.0/24"]
+snmp_community = public
+snmp_timeout = 2
+```
+
+## Central Server
+
+The central server consists of:
+
+1. **Node.js API**: RESTful API for data collection and retrieval
+2. **PostgreSQL Database**: Storage for printer data, metrics, users, and organizations
+3. **React Frontend**: Web interface for monitoring and management
+
+### Server Requirements
+
+- VPS or dedicated server with:
+  - 2+ CPU cores
+  - 4+ GB RAM
+  - 50+ GB storage
+- Docker and Docker Compose
+- Domain name with SSL certificate
+
+### Server Installation
+
+1. Clone the repository to your server
+2. Configure environment variables in `docker-compose.yml`
+3. Run `docker-compose up -d` to start all services
+4. Access the web interface at your domain name
+
+### Database Schema
+
+The PostgreSQL database includes the following tables:
+
+- `users`: System users with authentication
+- `agents`: Registered monitoring agents
+- `printers`: Discovered printer information
+- `metrics`: Collected printer metrics
+- `organizations`: Customer organizations
+- `organization_users`: User-organization relationships
+- `organization_agents`: Agent-organization relationships
+
+## Web Frontend
+
+The web frontend provides a user-friendly interface for:
+
+- Dashboard with printer status overview
+- Detailed printer monitoring and metrics
+- Agent management
+- User management (admin only)
+- Organization management (admin only)
+
+### User Roles
+
+- **Admin**: Full system access, including user management
+- **User**: Basic monitoring and reporting access
+
+## API Documentation
+
+### Authentication
+
+All API requests require authentication:
+
+- User endpoints: JWT token in Authorization header
+- Agent endpoints: API key in Authorization header
+
+### Agent Endpoints
+
+- `POST /api/agents/register`: Register a new agent
+- `POST /api/data`: Submit printer data and metrics
+
+### User Endpoints
+
+- `POST /api/auth/login`: User login
+- `GET /api/printers`: Get all printers
+- `GET /api/printers/:id`: Get printer details
+- `GET /api/agents`: Get all agents (admin only)
+- `GET /api/users`: Get all users (admin only)
+- `POST /api/users`: Create new user (admin only)
+- `GET /api/dashboard/stats`: Get dashboard statistics
+
+## Raspberry Pi Deployment Guide
+
+The system includes a Raspberry Pi deployment option for a cost-effective, dedicated hardware solution.
+
+### Hardware Requirements
+
+- Raspberry Pi Zero W 2 (~$15) or Raspberry Pi 4 ($35-55)
+- Power supply
+- MicroSD card (8+ GB)
+- Optional: Case
+
+### Installation Steps
+
+1. Flash Raspberry Pi OS Lite to MicroSD card
+2. Boot the Raspberry Pi and connect to network
+3. Run the setup script:
+   ```bash
+   wget -O setup.sh https://your-server/setup.sh
+   chmod +x setup.sh
+   ./setup.sh
+   ```
+4. Edit the configuration file at `~/printer-agent/agent/config.ini`
+5. Start the agent service:
+   ```bash
+   sudo systemctl start printer-agent
+   ```
+
+## Troubleshooting
+
+### Agent Issues
+
+- **Agent not discovering printers**: Check SNMP configuration and firewall settings
+- **Agent not connecting to server**: Verify internet connectivity and server URL
+- **High CPU usage**: Reduce polling frequency in configuration
+
+### Server Issues
+
+- **API not starting**: Check database connection and logs
+- **Database errors**: Verify PostgreSQL is running and accessible
+- **Performance issues**: Consider scaling up server resources
+
+## Security Considerations
+
+- All communication between agent and server is encrypted with HTTPS
+- Database access is restricted to the server network
+- API tokens are used for agent authentication
+- JWT tokens with appropriate expiration for user authentication
+- Passwords are hashed using bcrypt
+- Regular security updates for all components
