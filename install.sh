@@ -84,7 +84,7 @@ mkdir -p models routes middleware
 
 # Copy files from the repository
 git clone https://github.com/zcumberland/Printer_SNMP_Management.git temp
-cp -r temp/Server/* .
+cp -r temp/server/* .
 rm -rf temp
 
 # Create Docker and Docker Compose files
