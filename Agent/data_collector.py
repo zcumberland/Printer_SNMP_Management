@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-# Printer Monitoring Agent
-# A lightweight agent to collect printer data and send to central server
+"""
+Printer SNMP Data Collector
+
+This script discovers printers on the network and collects information using SNMP.
+It stores the data locally and can send it to a central server.
+"""
 
 import os
 import sys
@@ -10,14 +14,26 @@ import logging
 import socket
 import uuid
 import sqlite3
-import requests
 import ipaddress
-from pysnmp.hlapi import *
-from datetime import datetime
-import configparser
 import argparse
+import configparser
+from datetime import datetime
 from threading import Thread, Lock
 import schedule
+
+# Import the SNMP library
+try:
+    from pysnmp.hlapi import *
+except ImportError:
+    print("Error: pysnmp library not found. Install it using 'pip install pysnmp'")
+    sys.exit(1)
+
+# Import the server integration module (if available)
+try:
+    from agent_integration import ServerIntegration
+    SERVER_INTEGRATION_AVAILABLE = True
+except ImportError:
+    SERVER_INTEGRATION_AVAILABLE = False
 
 # Setup logging
 logging.basicConfig(
@@ -28,7 +44,7 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-logger = logging.getLogger("PrinterAgent")
+logger = logging.getLogger("PrinterCollector")
 
 # Default configuration
 DEFAULT_CONFIG = {
@@ -40,8 +56,8 @@ DEFAULT_CONFIG = {
         "data_dir": "./data"
     },
     "server": {
-        "url": "https://your-server-domain.com/api",
-        "token": ""
+        "enabled": False,
+        "url": "http://your-server-url.com/api",
     },
     "network": {
         "subnets": ["192.168.1.0/24"],
@@ -50,15 +66,24 @@ DEFAULT_CONFIG = {
     }
 }
 
-class PrinterAgent:
+class PrinterCollector:
     def __init__(self, config_file="config.ini"):
-        """Initialize the printer monitoring agent"""
+        """Initialize the printer data collector"""
         self.config = self._load_config(config_file)
-        self.db_path = os.path.join(self.config["agent"]["data_dir"], "agent.db")
+        self.db_path = os.path.join(self.config["agent"]["data_dir"], "printers.db")
         self.lock = Lock()
         self._setup_data_directory()
         self._setup_database()
         
+        # Set up server integration if enabled
+        self.server = None
+        if self.config["server"]["enabled"] and SERVER_INTEGRATION_AVAILABLE:
+            self.server = ServerIntegration(
+                server_url=self.config["server"]["url"],
+                agent_id=self.config["agent"]["id"],
+                agent_name=self.config["agent"]["name"]
+            )
+            
     def _load_config(self, config_file):
         """Load configuration from file or create default"""
         config = DEFAULT_CONFIG.copy()
@@ -79,8 +104,13 @@ class PrinterAgent:
                                     config[section][key] = parser.getfloat(section, key)
                                 elif isinstance(config[section][key], bool):
                                     config[section][key] = parser.getboolean(section, key)
-                                elif isinstance(config[section][key], list):
-                                    config[section][key] = json.loads(parser.get(section, key))
+                                elif isinstance(config[section][key], list) and key == "subnets":
+                                    # Parse the subnets list from string representation
+                                    try:
+                                        config[section][key] = json.loads(parser.get(section, key))
+                                    except:
+                                        # Fallback to default if parsing fails
+                                        logger.error(f"Error parsing subnet list, using default")
                                 else:
                                     config[section][key] = parser.get(section, key)
                 
@@ -136,6 +166,7 @@ class PrinterAgent:
                     model TEXT,
                     name TEXT,
                     last_seen TIMESTAMP,
+                    server_id INTEGER DEFAULT NULL,
                     UNIQUE(ip_address)
                 )
                 ''')
@@ -151,16 +182,8 @@ class PrinterAgent:
                     status TEXT,
                     error_state TEXT,
                     raw_data TEXT,
+                    sent_to_server BOOLEAN DEFAULT 0,
                     FOREIGN KEY (printer_id) REFERENCES printers(id)
-                )
-                ''')
-                
-                # Create queue table for unsent data
-                cursor.execute('''
-                CREATE TABLE IF NOT EXISTS send_queue (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    data TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 ''')
                 
@@ -182,13 +205,20 @@ class PrinterAgent:
                 
                 # For small networks, scan all IPs
                 # For larger networks, you might want to implement a more efficient scanning method
+                total_ips = len(list(network.hosts()))
+                logger.info(f"Scanning {total_ips} IP addresses in network {subnet}")
+                
                 for ip in network.hosts():
                     ip_str = str(ip)
                     if self._check_snmp_device(ip_str):
                         printer_info = self._get_printer_info(ip_str)
                         if printer_info:
-                            self._save_printer(printer_info)
+                            printer_id = self._save_printer(printer_info)
                             discovered.append(printer_info)
+                            
+                            # Send to server if enabled
+                            if self.server:
+                                self.server.send_printer_data(printer_info)
             except Exception as e:
                 logger.error(f"Error scanning subnet {subnet}: {e}")
         
@@ -270,7 +300,7 @@ class PrinterAgent:
                 
                 # Check if printer already exists
                 cursor.execute(
-                    "SELECT id FROM printers WHERE ip_address = ?",
+                    "SELECT id, server_id FROM printers WHERE ip_address = ?",
                     (printer_info['ip_address'],)
                 )
                 result = cursor.fetchone()
@@ -278,6 +308,7 @@ class PrinterAgent:
                 if result:
                     # Update existing printer
                     printer_id = result[0]
+                    server_id = result[1]
                     cursor.execute(
                         """UPDATE printers 
                            SET model = ?, name = ?, 
@@ -307,6 +338,7 @@ class PrinterAgent:
                         )
                     )
                     printer_id = cursor.lastrowid
+                    server_id = None
                     logger.info(f"Added new printer: {printer_info['ip_address']}")
                 
                 conn.commit()
@@ -333,6 +365,10 @@ class PrinterAgent:
                         metrics = self._get_printer_metrics(dict(printer))
                         if metrics:
                             self._save_metrics(printer['id'], metrics)
+                            
+                            # Send to server if enabled
+                            if self.server and printer['server_id'] is not None:
+                                self.server.send_metrics(printer['server_id'], metrics)
                     except Exception as e:
                         logger.error(f"Error collecting metrics for printer {printer['ip_address']}: {e}")
                 
@@ -416,102 +452,11 @@ class PrinterAgent:
                 
                 conn.commit()
                 logger.debug(f"Saved metrics for printer ID {printer_id}")
-                
-                # Queue data to be sent to server
-                self._queue_data_for_server({
-                    'type': 'metrics',
-                    'agent_id': self.config['agent']['id'],
-                    'printer_id': printer_id,
-                    'data': metrics
-                })
-                
                 return True
         except Exception as e:
             logger.error(f"Error saving metrics: {e}")
             return False
-    
-    def _queue_data_for_server(self, data):
-        """Queue data to be sent to the central server"""
-        try:
-            with self.lock, sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
-                cursor.execute(
-                    "INSERT INTO send_queue (data) VALUES (?)",
-                    (json.dumps(data),)
-                )
-                
-                conn.commit()
-                logger.debug("Queued data for server")
-        except Exception as e:
-            logger.error(f"Error queuing data: {e}")
-    
-    def sync_with_server(self):
-        """Send queued data to the central server"""
-        if not self.config['server']['token']:
-            logger.warning("Server token not configured, skipping sync")
-            return False
-        
-        logger.info("Starting server sync")
-        
-        try:
-            with self.lock, sqlite3.connect(self.db_path) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                
-                # Get queued items
-                cursor.execute("SELECT id, data FROM send_queue ORDER BY created_at ASC LIMIT 100")
-                queue_items = cursor.fetchall()
-                
-                if not queue_items:
-                    logger.info("No items to sync")
-                    return True
-                
-                logger.info(f"Found {len(queue_items)} items to sync")
-                
-                for item in queue_items:
-                    try:
-                        data = json.loads(item['data'])
-                        success = self._send_to_server(data)
-                        
-                        if success:
-                            # Remove from queue
-                            cursor.execute("DELETE FROM send_queue WHERE id = ?", (item['id'],))
-                            conn.commit()
-                    except Exception as e:
-                        logger.error(f"Error processing queue item {item['id']}: {e}")
-                
-                logger.info("Sync complete")
-                return True
-        except Exception as e:
-            logger.error(f"Error in server sync: {e}")
-            return False
-    
-    def _send_to_server(self, data):
-        """Send data to the central server"""
-        try:
-            headers = {
-                'Authorization': f"Bearer {self.config['server']['token']}",
-                'Content-Type': 'application/json'
-            }
-            
-            response = requests.post(
-                f"{self.config['server']['url']}/data",
-                json=data,
-                headers=headers,
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                logger.debug("Data sent successfully")
-                return True
-            else:
-                logger.error(f"Server returned error: {response.status_code} - {response.text}")
-                return False
-        except Exception as e:
-            logger.error(f"Error sending data to server: {e}")
-            return False
-    
+
     def set_printer_serial(self, ip_address, serial_number):
         """Manually set a printer's serial number"""
         try:
@@ -526,21 +471,6 @@ class PrinterAgent:
                 if cursor.rowcount > 0:
                     conn.commit()
                     logger.info(f"Set serial number {serial_number} for printer {ip_address}")
-                    
-                    # Queue update for server
-                    cursor.execute("SELECT id FROM printers WHERE ip_address = ?", (ip_address,))
-                    result = cursor.fetchone()
-                    if result:
-                        self._queue_data_for_server({
-                            'type': 'printer_update',
-                            'agent_id': self.config['agent']['id'],
-                            'printer_id': result[0],
-                            'data': {
-                                'ip_address': ip_address,
-                                'serial_number': serial_number
-                            }
-                        })
-                    
                     return True
                 else:
                     logger.error(f"Printer with IP {ip_address} not found")
@@ -550,62 +480,73 @@ class PrinterAgent:
             return False
     
     def register_with_server(self):
-        """Register this agent with the central server"""
-        if not self.config['server']['url']:
-            logger.warning("Server URL not configured, skipping registration")
+        """Register with the central server"""
+        if not self.server:
+            logger.warning("Server integration not available or disabled")
             return False
-            
+        
+        success = self.server.register()
+        if success:
+            logger.info("Successfully registered with server")
+            return True
+        else:
+            logger.error("Failed to register with server")
+            return False
+    
+    def sync_unregistered_printers(self):
+        """Send any unregistered printers to the server"""
+        if not self.server:
+            logger.warning("Server integration not available or disabled")
+            return False
+        
         try:
-            registration_data = {
-                'agent_id': self.config['agent']['id'],
-                'name': self.config['agent']['name'],
-                'hostname': socket.gethostname(),
-                'ip_address': socket.gethostbyname(socket.gethostname()),
-                'os_info': f"{sys.platform} {os.name}",
-                'version': '1.0.0'  # Agent version
-            }
-            
-            headers = {'Content-Type': 'application/json'}
-            
-            # If we have a token, use it
-            if self.config['server']['token']:
-                headers['Authorization'] = f"Bearer {self.config['server']['token']}"
-            
-            response = requests.post(
-                f"{self.config['server']['url']}/agents/register",
-                json=registration_data,
-                headers=headers,
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                if 'token' in data:
-                    self.config['server']['token'] = data['token']
-                    self._save_config(self.config, "config.ini")
-                    logger.info("Successfully registered with server")
-                    return True
-                else:
-                    logger.info("Registration acknowledged by server")
-                    return True
-            else:
-                logger.error(f"Registration failed: {response.status_code} - {response.text}")
-                return False
+            with self.lock, sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                
+                # Get all printers without server_id
+                cursor.execute("SELECT * FROM printers WHERE server_id IS NULL")
+                printers = cursor.fetchall()
+                
+                success_count = 0
+                for printer in printers:
+                    printer_data = {
+                        'ip_address': printer['ip_address'],
+                        'serial_number': printer['serial_number'],
+                        'model': printer['model'],
+                        'name': printer['name']
+                    }
+                    
+                    if self.server.send_printer_data(printer_data):
+                        # Update with the server response when we have integration to get server IDs
+                        # For now, just mark as sent by setting a placeholder server ID
+                        cursor.execute(
+                            "UPDATE printers SET server_id = ? WHERE id = ?",
+                            (1, printer['id'])  # Placeholder ID, will need proper integration
+                        )
+                        conn.commit()
+                        success_count += 1
+                
+                logger.info(f"Synced {success_count} of {len(printers)} printers with server")
+                return success_count > 0
         except Exception as e:
-            logger.error(f"Error registering with server: {e}")
+            logger.error(f"Error syncing printers with server: {e}")
             return False
     
     def run(self):
-        """Run the agent with scheduled tasks"""
-        logger.info("Starting Printer Monitoring Agent")
+        """Run the data collector with scheduled tasks"""
+        logger.info("Starting Printer Data Collector")
         
-        # Try to register with server
-        self.register_with_server()
+        # Try to register with server if enabled
+        if self.config["server"]["enabled"] and SERVER_INTEGRATION_AVAILABLE:
+            self.register_with_server()
         
         # Setup schedules
         schedule.every(self.config['agent']['polling_interval']).seconds.do(self.collect_metrics)
         schedule.every(self.config['agent']['discovery_interval']).seconds.do(self.discover_printers)
-        schedule.every(60).seconds.do(self.sync_with_server)  # Sync every minute
+        
+        if self.config["server"]["enabled"] and SERVER_INTEGRATION_AVAILABLE:
+            schedule.every(60).seconds.do(self.sync_unregistered_printers)
         
         # Do an initial discovery
         self.discover_printers()
@@ -624,30 +565,27 @@ class PrinterAgent:
 
 def main():
     """Main entry point"""
-    parser = argparse.ArgumentParser(description="Printer Monitoring Agent")
+    parser = argparse.ArgumentParser(description="Printer SNMP Data Collector")
     parser.add_argument("--config", default="config.ini", help="Path to config file")
     parser.add_argument("--discover", action="store_true", help="Run printer discovery")
     parser.add_argument("--collect", action="store_true", help="Collect metrics once")
-    parser.add_argument("--sync", action="store_true", help="Sync with server")
     parser.add_argument("--set-serial", nargs=2, metavar=("IP", "SERIAL"), help="Set printer serial number")
     parser.add_argument("--register", action="store_true", help="Register agent with server")
     
     args = parser.parse_args()
     
-    agent = PrinterAgent(config_file=args.config)
+    collector = PrinterCollector(config_file=args.config)
     
     if args.discover:
-        agent.discover_printers()
+        collector.discover_printers()
     elif args.collect:
-        agent.collect_metrics()
-    elif args.sync:
-        agent.sync_with_server()
+        collector.collect_metrics()
     elif args.set_serial:
-        agent.set_printer_serial(args.set_serial[0], args.set_serial[1])
+        collector.set_printer_serial(args.set_serial[0], args.set_serial[1])
     elif args.register:
-        agent.register_with_server()
+        collector.register_with_server()
     else:
-        agent.run()  # Run as service
+        collector.run()  # Run as service
 
 if __name__ == "__main__":
     main()
