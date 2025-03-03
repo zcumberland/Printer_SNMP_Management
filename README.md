@@ -95,21 +95,23 @@ setup_windows.bat http://your-server-ip:3000/api
 **Linux:**
 ```bash
 # From the project root
-./start_dev.sh
+./scripts/start_dev.sh
 
 # Or individually
-cd Server && ./run_dev.sh  # Terminal 1
-cd FrontEnd && ./run_dev.sh # Terminal 2
+cd scripts && ./run_server.sh  # Terminal 1
+cd scripts && ./run_frontend.sh # Terminal 2
+cd scripts && ./run_agent.sh # Terminal 3 (if needed)
 ```
 
 **Windows:**
 ```
 # From the project root
-start_dev.bat
+scripts\start_dev.bat
 
 # Or individually
-cd Server && run_dev.bat
-cd FrontEnd && run_dev.bat
+cd scripts && run_server.bat
+cd scripts && run_frontend.bat
+cd scripts && run_agent.bat
 ```
 
 ### Production Mode
@@ -117,44 +119,44 @@ cd FrontEnd && run_dev.bat
 **Linux:**
 ```bash
 # From the project root
-./start_production.sh
+./scripts/start_prod.sh
 
-# Or just the server with Docker
-cd Server && ./run_docker.sh
+# Or using Docker
+./scripts/start_docker.sh
 ```
 
 **Windows:**
 ```
 # From the project root
-start_production.bat
+scripts\start_prod.bat
 
-# Or just the server with Docker
-cd Server && run_docker.bat
+# Or using Docker
+scripts\start_docker.bat
 ```
 
 ### Agent
 
 **Linux:**
 ```bash
-cd Agent
-./run_agent.sh
+# From the project root
+./scripts/run_agent.sh
 
-# For discovery only
-./discover_printers.sh
+# Or from the scripts directory
+cd scripts && ./run_agent.sh
 ```
 
 **Windows:**
 ```
-cd Agent
-run_agent.bat
+# From the project root
+scripts\run_agent.bat
 
-# For discovery only
-discover_printers.bat
+# Or from the scripts directory
+cd scripts && run_agent.bat
 ```
 
 ## System Requirements
-- Server: Node.js 16+, PostgreSQL 14+ (or Docker)
-- Frontend: Node.js 16+
+- Server: Node.js 18+, PostgreSQL 14+ (or Docker)
+- Frontend: Node.js 18+
 - Agent: Python 3.8+, PySNMP
 
 ## Security Notes
@@ -187,14 +189,28 @@ Printer_SNMP_Management/
 │   ├── package.json         # Node.js dependencies
 │   ├── routes/              # API endpoints
 │   └── server.js            # Main server entry point
-└── scripts/                 # Installation scripts
+└── scripts/                 # Installation and runtime scripts
+    ├── run_agent.bat        # Run agent (Windows)
+    ├── run_agent.sh         # Run agent (Linux)
+    ├── run_all.bat          # Run all components (Windows)
+    ├── run_all.sh           # Run all components (Linux)
+    ├── run_frontend.bat     # Run frontend (Windows)
+    ├── run_frontend.sh      # Run frontend (Linux)
+    ├── run_server.bat       # Run server (Windows)
+    ├── run_server.sh        # Run server (Linux)
     ├── setup_agent.sh       # Agent setup (Linux)
     ├── setup_all.bat        # Full setup (Windows)
     ├── setup_all.sh         # Full setup (Linux)
     ├── setup_frontend.bat   # Frontend setup (Windows)
     ├── setup_frontend.sh    # Frontend setup (Linux)
     ├── setup_server.bat     # Server setup (Windows)
-    └── setup_server.sh      # Server setup (Linux)
+    ├── setup_server.sh      # Server setup (Linux)
+    ├── start_dev.bat        # Start dev environment (Windows)
+    ├── start_dev.sh         # Start dev environment (Linux)
+    ├── start_docker.bat     # Start Docker environment (Windows)
+    ├── start_docker.sh      # Start Docker environment (Linux)
+    ├── start_prod.bat       # Start production environment (Windows)
+    └── start_prod.sh        # Start production environment (Linux)
 ```
 
 ## Troubleshooting

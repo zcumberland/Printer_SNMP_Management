@@ -41,6 +41,27 @@ install_dependencies() {
     else
         echo "Node.js is already installed: $(node -v)"
     fi
+    
+    # Check for jq installation
+    if ! command -v jq &> /dev/null; then
+        echo "jq not found. Installing..."
+        if command -v apt &> /dev/null; then
+            sudo apt install -y jq
+        elif command -v dnf &> /dev/null; then
+            sudo dnf install -y jq
+        elif command -v yum &> /dev/null; then
+            sudo yum install -y jq
+        elif command -v pacman &> /dev/null; then
+            sudo pacman -Sy jq
+        elif command -v zypper &> /dev/null; then
+            sudo zypper install -y jq
+        else
+            echo "Cannot install jq automatically. Please install jq manually."
+            exit 1
+        fi
+    else
+        echo "jq is already installed: $(jq --version)"
+    fi
 }
 
 # Install dependencies

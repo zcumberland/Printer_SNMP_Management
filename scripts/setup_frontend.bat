@@ -31,11 +31,18 @@ REM Check if package.json exists and has proxy configuration
 findstr "\"proxy\":" package.json >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
     echo Adding proxy configuration to package.json...
-    REM This requires jq or similar JSON tool, which isn't standard on Windows
-    REM For simplicity, let's just notify the user
-    echo NOTICE: Please manually add the following line to your package.json:
-    echo   "proxy": "http://localhost:3000"
-    echo This should be added inside the root JSON object.
+    
+    REM Using PowerShell to modify JSON (built into Windows 10/11)
+    powershell -Command "(Get-Content package.json -Raw | ConvertFrom-Json) | Add-Member -Name 'proxy' -Value 'http://localhost:3000' -MemberType NoteProperty -Force | ConvertTo-Json -Depth 100 | Set-Content package.json"
+    
+    if %ERRORLEVEL% NEQ 0 (
+        echo Failed to modify package.json with PowerShell.
+        echo NOTICE: Please manually add the following line to your package.json:
+        echo   "proxy": "http://localhost:3000"
+        echo This should be added inside the root JSON object.
+    ) else (
+        echo Successfully added proxy configuration.
+    )
 )
 
 REM Create startup scripts
