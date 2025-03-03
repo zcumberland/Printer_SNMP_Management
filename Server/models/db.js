@@ -43,6 +43,16 @@ async function initializeDatabase() {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
 
+      CREATE TABLE IF NOT EXISTS organizations (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) UNIQUE NOT NULL,
+        contact_name VARCHAR(100),
+        contact_email VARCHAR(100),
+        phone VARCHAR(50),
+        address VARCHAR(255),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      
       CREATE TABLE IF NOT EXISTS printers (
         id SERIAL PRIMARY KEY,
         agent_id INTEGER REFERENCES agents(id) ON DELETE CASCADE,
@@ -68,16 +78,6 @@ async function initializeDatabase() {
         status VARCHAR(50),
         error_state VARCHAR(100),
         raw_data JSONB
-      );
-
-      CREATE TABLE IF NOT EXISTS organizations (
-        id SERIAL PRIMARY KEY,
-        name VARCHAR(100) UNIQUE NOT NULL,
-        contact_name VARCHAR(100),
-        contact_email VARCHAR(100),
-        phone VARCHAR(50),
-        address VARCHAR(255),
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
       
       CREATE TABLE IF NOT EXISTS agent_configs (

@@ -1,131 +1,229 @@
 # Printer SNMP Management System
 
-A comprehensive solution for monitoring and managing printers across multiple locations via SNMP. The system consists of a central server, distributed agents, and a web frontend.
+A comprehensive solution for monitoring and managing networked printers using SNMP.
 
-## Overview
-
-This system allows IT administrators and managed service providers to monitor printer status, toner levels, page counts, and other metrics remotely. The architecture supports multi-tenant deployment with organization separation.
-
-### Key Features
-
-- **Centralized Dashboard**: Monitor all printers across multiple locations
-- **Printer Discovery**: Automatic discovery of printers on the network
-- **SNMP Monitoring**: Track printer metrics including page counts, toner levels, and status
-- **Multi-tenant**: Separate organizations with isolated data
-- **Role-based Access Control**: Admin and user roles with appropriate permissions
-- **Distributed Agents**: Deploy lightweight agents at customer sites
-- **Alerts & Notifications**: Get notified of printer issues and low supplies
-
-## Components
-
-The system consists of three main components:
-
-### Central Server
-
-- **REST API**: Provides endpoints for the frontend and agents
-- **Database**: Stores printer information, metrics, users, and configuration
-- **Authentication**: Handles user authentication and authorization
-
-### Monitoring Agents
-
-- **Printer Discovery**: Finds printers on configured network segments
-- **SNMP Polling**: Collects metrics from printers at regular intervals
-- **Local Database**: Stores data locally when offline
-- **Data Synchronization**: Sends metrics to the central server
-
-### Web Frontend
-
-- **Dashboard**: Visualize printer metrics and status
-- **Printer Management**: View and manage printers
-- **User Management**: Add, remove, and manage user permissions
-- **Organization Management**: Configure customer organizations
-- **Agent Configuration**: Configure agent polling settings
-
-## Installation
-
-Follow these steps to set up the complete system:
-
-### Server Setup
-
-1. Ensure you have Docker and Docker Compose installed
-2. Clone this repository
-3. Navigate to the Server directory: `cd Server`
-4. Run the installation script: `./install.sh`
-
-This will start the server and database containers.
-
-### Agent Setup
-
-For each location where you want to monitor printers:
-
-1. Copy the Agent directory to a computer on the network
-2. Install Python 3.6+ if not already installed
-3. Install requirements: `pip install -r requirements.txt`
-4. Configure the agent: Edit `config.ini` with server URL and network settings
-5. Run the agent: `python data_collector.py`
-
-For automated installation, use the provided script:
-```
-./scripts/setup_agent.sh <server_url>
-```
-
-### Frontend Setup
-
-The frontend can be installed separately or as part of the server:
-
-1. Navigate to the Frontend directory: `cd Frontend`
-2. Install dependencies: `npm install`
-3. Build the frontend: `npm run build`
-4. Configure nginx: Edit `nginx.conf` with your server URL
-5. Start the frontend: `docker-compose up -d`
-
-## Development
-
-### Server
-
-The server uses Node.js with Express. To run in development mode:
-
-```
-cd Server
-npm install
-npm run dev
-```
+## Project Components
 
 ### Agent
+- Python-based agent for discovering and monitoring printers via SNMP
+- Collects metrics like toner levels, page counts, and printer status
+- Sends data to central server
+- Works on Windows and Linux
 
-The agent is written in Python. To run in development mode:
-
-```
-cd Agent
-pip install -r requirements.txt
-python data_collector.py --discover
-```
+### Server
+- Node.js backend with Express
+- RESTful API for data collection and management
+- Authentication and user management
+- PostgreSQL database for data storage
 
 ### Frontend
+- React-based web interface
+- Dashboard for printer monitoring
+- User and organization management
+- Responsive design using Material UI
 
-The frontend is built with React. To run in development mode:
+## Setup Instructions
 
+### Complete System Setup (Server + Frontend)
+
+**Linux:**
+```bash
+cd Printer_SNMP_Management
+chmod +x scripts/setup_all.sh
+./scripts/setup_all.sh
 ```
-cd Frontend
-npm install
-npm start
+
+**Windows:**
+```
+cd Printer_SNMP_Management
+scripts\setup_all.bat
+```
+Note: The Windows install scripts will check for prerequisites like Node.js and Docker and provide instructions if they're missing.
+
+### Individual Component Setup
+
+#### Server Setup
+
+**Linux:**
+```bash
+cd Printer_SNMP_Management
+chmod +x scripts/setup_server.sh
+./scripts/setup_server.sh
 ```
 
-## Configuration
+**Windows:**
+```
+cd Printer_SNMP_Management
+scripts\setup_server.bat
+```
+The server setup will generate secure random passwords for the admin user and database.
 
-### Server
+#### Frontend Setup
 
-Server configuration is managed through environment variables. See `Server/compose.yml`.
+**Linux:**
+```bash
+cd Printer_SNMP_Management
+chmod +x scripts/setup_frontend.sh
+./scripts/setup_frontend.sh
+```
+
+**Windows:**
+```
+cd Printer_SNMP_Management
+scripts\setup_frontend.bat
+```
+
+#### Agent Setup
+
+**Linux:**
+```bash
+cd Printer_SNMP_Management/Agent
+chmod +x ../scripts/setup_agent.sh
+../scripts/setup_agent.sh http://your-server-ip:3000/api
+```
+
+**Windows:**
+```
+cd Printer_SNMP_Management\Agent
+setup_windows.bat http://your-server-ip:3000/api
+```
+
+## Running the System
+
+### Development Mode
+
+**Linux:**
+```bash
+# From the project root
+./start_dev.sh
+
+# Or individually
+cd Server && ./run_dev.sh  # Terminal 1
+cd FrontEnd && ./run_dev.sh # Terminal 2
+```
+
+**Windows:**
+```
+# From the project root
+start_dev.bat
+
+# Or individually
+cd Server && run_dev.bat
+cd FrontEnd && run_dev.bat
+```
+
+### Production Mode
+
+**Linux:**
+```bash
+# From the project root
+./start_production.sh
+
+# Or just the server with Docker
+cd Server && ./run_docker.sh
+```
+
+**Windows:**
+```
+# From the project root
+start_production.bat
+
+# Or just the server with Docker
+cd Server && run_docker.bat
+```
 
 ### Agent
 
-Agent configuration is in `Agent/config.ini`. You can configure:
+**Linux:**
+```bash
+cd Agent
+./run_agent.sh
 
-- Network subnets to scan
-- SNMP community string
-- Polling intervals
-- Server connection details
+# For discovery only
+./discover_printers.sh
+```
+
+**Windows:**
+```
+cd Agent
+run_agent.bat
+
+# For discovery only
+discover_printers.bat
+```
+
+## System Requirements
+- Server: Node.js 16+, PostgreSQL 14+ (or Docker)
+- Frontend: Node.js 16+
+- Agent: Python 3.8+, PySNMP
+
+## Security Notes
+- Default credentials are for development only
+- Change all default passwords and JWT secrets in production
+- Use environment variables for sensitive configuration
+
+## Directory Structure
+
+```
+Printer_SNMP_Management/
+├── Agent/                   # SNMP monitoring agent
+│   ├── agent_integration.py # Server communication
+│   ├── config.ini           # Agent configuration
+│   ├── data_collector.py    # Core monitoring functionality
+│   ├── db_setup.py          # Database initialization
+│   ├── requirements.txt     # Python dependencies
+│   └── setup_windows.bat    # Windows installation script
+├── FrontEnd/                # React web interface
+│   ├── dockerfile.frontend  # Docker configuration
+│   ├── nginx.conf           # Web server config
+│   ├── package.json         # Node.js dependencies
+│   └── src/                 # React source code
+├── README.md                # This documentation
+├── Server/                  # Backend API server
+│   ├── compose.yml          # Docker Compose config
+│   ├── dockerfile           # Docker configuration
+│   ├── middleware/          # Express middleware
+│   ├── models/              # Database models
+│   ├── package.json         # Node.js dependencies
+│   ├── routes/              # API endpoints
+│   └── server.js            # Main server entry point
+└── scripts/                 # Installation scripts
+    ├── setup_agent.sh       # Agent setup (Linux)
+    ├── setup_all.bat        # Full setup (Windows)
+    ├── setup_all.sh         # Full setup (Linux)
+    ├── setup_frontend.bat   # Frontend setup (Windows)
+    ├── setup_frontend.sh    # Frontend setup (Linux)
+    ├── setup_server.bat     # Server setup (Windows)
+    └── setup_server.sh      # Server setup (Linux)
+```
+
+## Troubleshooting
+
+### Common Issues
+
+#### Agent Cannot Connect to Server
+- Verify the server URL in the agent's config.ini
+- Check if the server is running and accessible
+- Ensure network connectivity between agent and server
+- Verify firewall settings allow connections
+
+#### Server Database Connection Issues
+- Verify database credentials in the .env file
+- Check if PostgreSQL is running
+- Ensure the database is created
+
+#### Frontend Not Loading
+- Check browser console for errors
+- Verify the server is running
+- Check proxy configuration in package.json
+
+### Getting Help
+If you encounter issues not covered here, please open an issue on the project repository.
+
+## Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

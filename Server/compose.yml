@@ -26,7 +26,7 @@ services:
 
   frontend:
     build:
-      context: ../frontend
+      context: ../FrontEnd
       dockerfile: dockerfile.frontend
     container_name: printer-monitor-frontend
     restart: unless-stopped

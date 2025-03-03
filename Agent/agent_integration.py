@@ -188,20 +188,20 @@ class ServerIntegration:
             logger.error(f"Error sending printer data: {e}")
             return False
     
-    def send_metrics(self, printer_id, metrics_data):
+    def send_metrics(self, metrics_data):
         """
         Send printer metrics to the server.
         
         Args:
-            printer_id (int): ID of the printer in the database
-            metrics_data (dict): Dictionary with metrics information
-                {
+            metrics_data (list): List of dictionaries with metrics information
+                [{
+                    'printer_id': int,
                     'page_count': int,
                     'toner_levels': dict,
                     'status': str,
                     'error_state': str,
                     'timestamp': str (ISO format)
-                }
+                }]
         
         Returns:
             bool: Success or failure
@@ -227,7 +227,6 @@ class ServerIntegration:
             # Prepare data for server
             data = {
                 'type': 'metrics',
-                'printer_id': printer_id,
                 'data': metrics_data
             }
             
@@ -245,7 +244,7 @@ class ServerIntegration:
             )
             
             if response.status_code == 200:
-                logger.info(f"Successfully sent metrics data for printer ID {printer_id}")
+                logger.info(f"Successfully sent metrics data for {len(metrics_data)} printers")
                 return True
             else:
                 logger.error(f"Error sending metrics data: {response.status_code} - {response.text}")

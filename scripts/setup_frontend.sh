@@ -1,204 +1,114 @@
 #!/bin/bash
-# Script to set up the React frontend
+# Printer SNMP Management - Frontend Setup Script
+# Works on Linux systems including ARM-based and common distributions
 
-# Exit on any error
 set -e
 
-echo "Setting up Printer Monitoring Frontend..."
-echo "--------------------------------------"
+echo "========================================================="
+echo "Printer SNMP Management - Frontend Setup"
+echo "========================================================="
 
-# Check if Node.js is installed
-if ! command -v node &> /dev/null
-then
-    echo "Node.js is not installed. Installing..."
-    curl -fsSL https://deb.nodesource.com/setup_16.x | sudo -E bash -
-    sudo apt-get install -y nodejs
-else
-    echo "Node.js is already installed"
-fi
-
-# Navigate to frontend directory
-cd ../frontend
-
-# Initialize a new React app if not already created
-if [ ! -f "package.json" ]; then
-    echo "Creating new React app..."
-    npx create-react-app .
-else
-    echo "React app already initialized"
-fi
+# Function to check and install packages based on distribution
+install_dependencies() {
+    echo "Checking system and installing dependencies..."
+    
+    # Install Node.js if not installed
+    if ! command -v node &> /dev/null; then
+        echo "Node.js not found. Installing..."
+        
+        if command -v apt &> /dev/null; then
+            # Debian/Ubuntu
+            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+            sudo apt install -y nodejs
+        elif command -v dnf &> /dev/null; then
+            # Fedora/RHEL/CentOS 8+
+            curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
+            sudo dnf install -y nodejs
+        elif command -v yum &> /dev/null; then
+            # Older RHEL/CentOS
+            curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
+            sudo yum install -y nodejs
+        elif command -v pacman &> /dev/null; then
+            # Arch Linux
+            sudo pacman -Sy nodejs npm
+        elif command -v zypper &> /dev/null; then
+            # openSUSE
+            sudo zypper install -y nodejs npm
+        else
+            echo "Unsupported package manager. Please install Node.js manually."
+            exit 1
+        fi
+    else
+        echo "Node.js is already installed: $(node -v)"
+    fi
+}
 
 # Install dependencies
-echo "Installing dependencies..."
-npm install @mui/material @emotion/react @emotion/styled @mui/icons-material
-npm install react-router-dom axios chart.js react-chartjs-2
+install_dependencies
 
-# Create src directory structure
-mkdir -p src/components
-mkdir -p src/pages
-mkdir -p src/services
-mkdir -p src/utils
-mkdir -p src/assets
+# Navigate to frontend directory
+cd "$(dirname "$0")/../FrontEnd"
+FRONTEND_DIR=$(pwd)
+echo "Setting up frontend in: $FRONTEND_DIR"
 
-# Create Nginx directory
-mkdir -p nginx
+# Install npm dependencies
+echo "Installing npm dependencies..."
+npm install
 
-# Copy Nginx configuration
-echo "Creating Nginx configuration..."
-cat > nginx/nginx.conf << 'EOF'
-server {
-    listen 80;
-    server_name localhost;
-    
-    root /usr/share/nginx/html;
-    index index.html;
+# Configure proxy for development
+if grep -q "\"proxy\":" package.json; then
+    echo "Proxy configuration already exists in package.json"
+else
+    # Add proxy configuration to package.json if not present
+    echo "Adding proxy configuration to package.json..."
+    # Using temporary file to handle the manipulation
+    jq '.proxy = "http://localhost:3000"' package.json > package.json.tmp
+    mv package.json.tmp package.json
+fi
 
-    # Gzip Settings
-    gzip on;
-    gzip_disable "msie6";
-    gzip_vary on;
-    gzip_proxied any;
-    gzip_comp_level 6;
-    gzip_buffers 16 8k;
-    gzip_http_version 1.1;
-    gzip_min_length 256;
-    gzip_types
-        application/atom+xml
-        application/javascript
-        application/json
-        application/ld+json
-        application/manifest+json
-        application/rss+xml
-        application/vnd.geo+json
-        application/vnd.ms-fontobject
-        application/x-font-ttf
-        application/x-web-app-manifest+json
-        application/xhtml+xml
-        application/xml
-        font/opentype
-        image/bmp
-        image/svg+xml
-        image/x-icon
-        text/cache-manifest
-        text/css
-        text/plain
-        text/vcard
-        text/vnd.rim.location.xloc
-        text/vtt
-        text/x-component
-        text/x-cross-domain-policy;
+# Create startup scripts
+echo "Creating startup scripts..."
 
-    # API Proxy
-    location /api/ {
-        proxy_pass http://api:3000/api/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_cache_bypass $http_upgrade;
-    }
+# Create run script for development
+cat > run_dev.sh << 'EOF'
+#!/bin/bash
+cd "$(dirname "$0")"
+npm start
+EOF
+chmod +x run_dev.sh
 
-    # React Router Support
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
+# Create build script 
+cat > build.sh << 'EOF'
+#!/bin/bash
+cd "$(dirname "$0")"
+npm run build
+EOF
+chmod +x build.sh
 
-    # Caching for static assets
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
-        expires 30d;
-        add_header Cache-Control "public, no-transform";
-    }
-
-    # Error pages
-    error_page 404 /index.html;
-    error_page 500 502 503 504 /50x.html;
-    location = /50x.html {
-        root /usr/share/nginx/html;
-    }
-}
+# Create Windows batch script for development
+cat > run_dev.bat << 'EOF'
+@echo off
+cd %~dp0
+npm start
 EOF
 
-# Create Dockerfile
-echo "Creating Dockerfile..."
-cat > dockerfile.frontend << 'EOF'
-FROM node:16-alpine as build
-
-WORKDIR /app
-
-# Copy package.json and install dependencies
-COPY package*.json ./
-RUN npm ci
-
-# Copy frontend code and build
-COPY . .
-RUN npm run build
-
-# Production environment
-FROM nginx:alpine
-
-# Copy built assets from the build stage
-COPY --from=build /app/build /usr/share/nginx/html
-
-# Add custom nginx config
-COPY nginx/nginx.conf /etc/nginx/conf.d/default.conf
-
-# Expose port
-EXPOSE 80
-
-# Start nginx
-CMD ["nginx", "-g", "daemon off;"]
+# Create Windows batch script for building
+cat > build.bat << 'EOF'
+@echo off
+cd %~dp0
+npm run build
 EOF
 
-# Create API service
-echo "Creating API service..."
-cat > src/services/api.js << 'EOF'
-import axios from 'axios';
-
-// Create an axios instance
-const api = axios.create({
-  baseURL: '/api',
-  timeout: 10000,
-  headers: {
-    'Content-Type': 'application/json'
-  }
-});
-
-// Add a request interceptor to add auth token
-api.interceptors.request.use(
-  config => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      config.headers['Authorization'] = `Bearer ${token}`;
-    }
-    return config;
-  },
-  error => {
-    return Promise.reject(error);
-  }
-);
-
-// Add a response interceptor to handle auth errors
-api.interceptors.response.use(
-  response => response,
-  error => {
-    if (error.response && error.response.status === 401) {
-      // Clear local storage and redirect to login
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      window.location.href = '/login';
-    }
-    return Promise.reject(error);
-  }
-);
-
-export default api;
-EOF
-
-echo "--------------------------------------"
+echo "========================================================="
 echo "Frontend setup complete!"
-echo "You can start the development server with: npm start"
-echo "Or build for production with: npm run build"
-echo "--------------------------------------"
+echo ""
+echo "For development mode:"
+echo "  ./run_dev.sh or run_dev.bat (Windows)"
+echo "  This will start the development server at http://localhost:3000"
+echo ""
+echo "To build for production:"
+echo "  ./build.sh or build.bat (Windows)"
+echo "  This will create a production build in the 'build' directory"
+echo ""
+echo "NOTE: Make sure the backend server is running before using the frontend."
+echo "========================================================="
