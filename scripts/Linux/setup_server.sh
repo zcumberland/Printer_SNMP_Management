@@ -44,44 +44,53 @@ install_dependencies() {
     
     # Install Docker if not installed
     if ! command -v docker &> /dev/null; then
-        echo "Docker not found. Installing..."
+        echo "Docker not found."
         
-        if command -v apt &> /dev/null; then
-            # Debian/Ubuntu
-            sudo apt update
-            sudo apt install -y apt-transport-https ca-certificates curl gnupg lsb-release
-            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-            sudo apt update
-            sudo apt install -y docker-ce docker-ce-cli containerd.io
-        elif command -v dnf &> /dev/null; then
-            # Fedora
-            sudo dnf -y install dnf-plugins-core
-            sudo dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
-            sudo dnf install -y docker-ce docker-ce-cli containerd.io
-        elif command -v yum &> /dev/null; then
-            # RHEL/CentOS
-            sudo yum install -y yum-utils
-            sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-            sudo yum install -y docker-ce docker-ce-cli containerd.io
-        elif command -v pacman &> /dev/null; then
-            # Arch Linux
-            sudo pacman -Sy docker
-        elif command -v zypper &> /dev/null; then
-            # openSUSE
-            sudo zypper install -y docker
+        # Check if running in WSL
+        if grep -q Microsoft /proc/version; then
+            echo "WSL detected. Docker Desktop for Windows is recommended."
+            echo "Please install Docker Desktop from https://www.docker.com/products/docker-desktop/"
+            echo "Skipping Docker installation. You can continue setup without Docker."
+            echo "Once Docker Desktop is installed, run 'docker --version' to verify the installation."
         else
-            echo "Unsupported package manager. Please install Docker manually."
-            exit 1
+            echo "Installing Docker..."
+            if command -v apt &> /dev/null; then
+                # Debian/Ubuntu
+                sudo apt update
+                sudo apt install -y apt-transport-https ca-certificates curl gnupg lsb-release
+                curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+                echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+                sudo apt update
+                sudo apt install -y docker-ce docker-ce-cli containerd.io
+            elif command -v dnf &> /dev/null; then
+                # Fedora
+                sudo dnf -y install dnf-plugins-core
+                sudo dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
+                sudo dnf install -y docker-ce docker-ce-cli containerd.io
+            elif command -v yum &> /dev/null; then
+                # RHEL/CentOS
+                sudo yum install -y yum-utils
+                sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+                sudo yum install -y docker-ce docker-ce-cli containerd.io
+            elif command -v pacman &> /dev/null; then
+                # Arch Linux
+                sudo pacman -Sy docker
+            elif command -v zypper &> /dev/null; then
+                # openSUSE
+                sudo zypper install -y docker
+            else
+                echo "Unsupported package manager. Please install Docker manually."
+                exit 1
+            fi
+            
+            # Start and enable Docker service
+            sudo systemctl start docker
+            sudo systemctl enable docker
+            
+            # Add current user to docker group
+            sudo usermod -aG docker $USER
+            echo "Docker installed. You may need to log out and back in for docker group permissions to take effect."
         fi
-        
-        # Start and enable Docker service
-        sudo systemctl start docker
-        sudo systemctl enable docker
-        
-        # Add current user to docker group
-        sudo usermod -aG docker $USER
-        echo "Docker installed. You may need to log out and back in for docker group permissions to take effect."
     else
         echo "Docker is already installed: $(docker --version)"
     fi

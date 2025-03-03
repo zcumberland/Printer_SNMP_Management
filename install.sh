@@ -83,11 +83,21 @@ check_requirements() {
         read -r install_docker
         if [[ "$install_docker" =~ ^[Yy]$ ]]; then
             echo "Installing Docker..."
-            curl -fsSL https://get.docker.com | sh
             
-            # Add current user to docker group
-            sudo usermod -aG docker $(whoami)
-            echo "Please log out and back in for Docker group changes to take effect."
+            # Check if running in WSL
+            if grep -q Microsoft /proc/version; then
+                echo "WSL detected. Docker Desktop for Windows is recommended."
+                echo "Please install Docker Desktop from https://www.docker.com/products/docker-desktop/"
+                echo "Skipping Docker installation. You can continue setup without Docker."
+                echo "Once Docker Desktop is installed, run 'docker --version' to verify the installation."
+            else
+                # Install Docker on non-WSL Linux
+                curl -fsSL https://get.docker.com | sh
+                
+                # Add current user to docker group
+                sudo usermod -aG docker $(whoami)
+                echo "Please log out and back in for Docker group changes to take effect."
+            fi
         else
             echo "Skipping Docker installation. Note that production mode requires Docker."
         fi
