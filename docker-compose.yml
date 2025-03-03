@@ -4,56 +4,46 @@ services:
   api:
     build:
       context: .
-      dockerfile: server/dockerfile.server
-    container_name: printer-server-api
+      dockerfile: Dockerfile
+    container_name: printer-monitor-api
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres_password
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres_password}
       - DB_HOST=db
-      - DB_NAME=printer_monitor
+      - DB_NAME=${DB_NAME:-printer_monitor}
       - DB_PORT=5432
-      - JWT_SECRET=your_secure_jwt_secret
-      - DEFAULT_ADMIN_PASSWORD=admin123
+      - JWT_SECRET=${JWT_SECRET:-change_this_in_production}
+      - DEFAULT_ADMIN_USERNAME=${DEFAULT_ADMIN_USERNAME:-admin}
+      - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-admin123}
+      - DEFAULT_ADMIN_EMAIL=${DEFAULT_ADMIN_EMAIL:-admin@example.com}
     depends_on:
       - db
     networks:
-      - printer-network
-
-  frontend:
-    build:
-      context: .
-      dockerfile: frontend/dockerfile.frontend
-    container_name: printer-server-frontend
-    restart: unless-stopped
-    ports:
-      - "80:80"
-    depends_on:
-      - api
-    networks:
-      - printer-network
+      - printer-monitor-network
 
   db:
     image: postgres:14-alpine
-    container_name: printer-server-db
+    container_name: printer-monitor-db
     restart: unless-stopped
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres_password
-      - POSTGRES_DB=printer_monitor
+      - POSTGRES_USER=${DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres_password}
+      - POSTGRES_DB=${DB_NAME:-printer_monitor}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
+      # Only expose this port on development environments, remove for production
       - "5432:5432"
     networks:
-      - printer-network
+      - printer-monitor-network
 
 networks:
-  printer-network:
+  printer-monitor-network:
     driver: bridge
 
 volumes:

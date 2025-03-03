@@ -1,186 +1,372 @@
-# Printer Monitoring System Documentation
+# Printer Monitoring Server Installation Guide
 
-## System Overview
+This guide will walk you through installing the printer monitoring server on an Ubuntu system.
 
-This document provides an overview of the Printer Monitoring System, which consists of:
+## Prerequisites
 
-1. **Agent Component**: Lightweight software deployed at customer locations to collect printer data
-2. **Central Server**: Backend API and database to store and process data
-3. **Web Frontend**: User interface for monitoring and management
+- Ubuntu 20.04 LTS or newer
+- Root/sudo privileges
+- Internet connection
+- Domain name (optional, for production use)
 
-## Agent Component
+## Option 1: Automated Installation (Recommended)
 
-The Agent is designed to run on customer premises and perform the following functions:
+### 1. Download the installation script
 
-- Discover printers on the network via SNMP
-- Collect printer metrics at regular intervals
-- Store serial numbers and printer data locally
-- Sync data with the central server
-- Work offline when connectivity is unavailable
-
-### Agent Deployment Options
-
-#### 1. Software-only Deployment
-- Install on existing Windows/Linux servers or workstations
-- Minimal resource requirements
-- Python-based application
-
-#### 2. Raspberry Pi Deployment
-- Cost-effective dedicated hardware (Raspberry Pi Zero W 2 or Raspberry Pi 4)
-- Small form factor
-- Pre-configured with Docker
-- Easy installation
-
-### Agent Requirements
-
-- Network access to printers (SNMP)
-- Internet connectivity to central server (can operate offline temporarily)
-- Python 3.6+ (for software deployment)
-- Docker (for container deployment)
-
-### Agent Configuration
-
-The agent is configured using a `config.ini` file with the following sections:
-
-```ini
-[agent]
-id = unique_agent_id
-name = Customer Site Name
-polling_interval = 300
-discovery_interval = 86400
-data_dir = ./data
-
-[server]
-url = https://your-server-url.com/api
-token = your_api_token
-
-[network]
-subnets = ["192.168.1.0/24", "10.0.0.0/24"]
-snmp_community = public
-snmp_timeout = 2
+```bash
+curl -o install.sh https://raw.githubusercontent.com/zcumberland/Printer_SNMP_Management/main/Server/install.sh
 ```
 
-## Central Server
+### 2. Make the script executable
 
-The central server consists of:
+```bash
+chmod +x install.sh
+```
 
-1. **Node.js API**: RESTful API for data collection and retrieval
-2. **PostgreSQL Database**: Storage for printer data, metrics, users, and organizations
-3. **React Frontend**: Web interface for monitoring and management
+### 3. Run the installation script
 
-### Server Requirements
+```bash
+./install.sh
+```
 
-- VPS or dedicated server with:
-  - 2+ CPU cores
-  - 4+ GB RAM
-  - 50+ GB storage
-- Docker and Docker Compose
-- Domain name with SSL certificate
+### 4. Secure your configuration
 
-### Server Installation
+After installation, edit the environment configuration file to set secure passwords:
 
-1. Clone the repository to your server
-2. Configure environment variables in `docker-compose.yml`
-3. Run `docker-compose up -d` to start all services
-4. Access the web interface at your domain name
+```bash
+nano ~/printer-monitor/.env
+```
 
-### Database Schema
+Change the following values:
 
-The PostgreSQL database includes the following tables:
+- `DB_PASSWORD`: A secure database password
+- `JWT_SECRET`: A long, random string for JWT token signing
+- `DEFAULT_ADMIN_PASSWORD`: A secure password for the admin user
 
-- `users`: System users with authentication
-- `agents`: Registered monitoring agents
-- `printers`: Discovered printer information
-- `metrics`: Collected printer metrics
-- `organizations`: Customer organizations
-- `organization_users`: User-organization relationships
-- `organization_agents`: Agent-organization relationships
+### 5. Restart the services to apply changes
 
-## Web Frontend
+```bash
+cd ~/printer-monitor
+docker-compose restart
+```
 
-The web frontend provides a user-friendly interface for:
+## Option 2: Manual Installation
 
-- Dashboard with printer status overview
-- Detailed printer monitoring and metrics
-- Agent management
-- User management (admin only)
-- Organization management (admin only)
+If you prefer to install the components manually, follow these steps:
 
-### User Roles
+### 1. Install system dependencies
 
-- **Admin**: Full system access, including user management
-- **User**: Basic monitoring and reporting access
+```bash
+sudo apt update
+sudo apt upgrade -y
+sudo apt install -y docker.io docker-compose git curl nginx
+```
 
-## API Documentation
+### 2. Set up Docker
 
-### Authentication
+```bash
+sudo systemctl enable docker
+sudo systemctl start docker
+sudo usermod -aG docker $USER
+# Log out and log back in for this to take effect
+```
 
-All API requests require authentication:
+### 3. Create the directory structure
 
-- User endpoints: JWT token in Authorization header
-- Agent endpoints: API key in Authorization header
+```bash
+mkdir -p ~/printer-monitor
+cd ~/printer-monitor
+mkdir -p models routes middleware
+```
 
-### Agent Endpoints
+### 4. Clone the repository code
 
-- `POST /api/agents/register`: Register a new agent
-- `POST /api/data`: Submit printer data and metrics
+```bash
+git clone https://github.com/zcumberland/Printer_SNMP_Management.git temp
+cp -r temp/Server/* .
+rm -rf temp
+```
 
-### User Endpoints
+### 5. Create configuration files
 
-- `POST /api/auth/login`: User login
-- `GET /api/printers`: Get all printers
-- `GET /api/printers/:id`: Get printer details
-- `GET /api/agents`: Get all agents (admin only)
-- `GET /api/users`: Get all users (admin only)
-- `POST /api/users`: Create new user (admin only)
-- `GET /api/dashboard/stats`: Get dashboard statistics
+Create the `.env` file:
 
-## Raspberry Pi Deployment Guide
+```bash
+cat > .env << EOF
+# Database Configuration
+DB_USER=postgres
+DB_PASSWORD=your_secure_password
+DB_NAME=printer_monitor
 
-The system includes a Raspberry Pi deployment option for a cost-effective, dedicated hardware solution.
+# JWT Configuration
+JWT_SECRET=your_secure_jwt_key
 
-### Hardware Requirements
+# Admin User
+DEFAULT_ADMIN_USERNAME=admin
+DEFAULT_ADMIN_PASSWORD=your_secure_admin_password
+DEFAULT_ADMIN_EMAIL=admin@example.com
+EOF
+```
 
-- Raspberry Pi Zero W 2 (~$15) or Raspberry Pi 4 ($35-55)
-- Power supply
-- MicroSD card (8+ GB)
-- Optional: Case
+Create the `Dockerfile`:
 
-### Installation Steps
+```bash
+cat > Dockerfile << 'EOF'
+FROM node:16-alpine
 
-1. Flash Raspberry Pi OS Lite to MicroSD card
-2. Boot the Raspberry Pi and connect to network
-3. Run the setup script:
-   ```bash
-   wget -O setup.sh https://your-server/setup.sh
-   chmod +x setup.sh
-   ./setup.sh
-   ```
-4. Edit the configuration file at `~/printer-agent/agent/config.ini`
-5. Start the agent service:
-   ```bash
-   sudo systemctl start printer-agent
-   ```
+WORKDIR /app
+
+# Copy package.json and install dependencies
+COPY package*.json ./
+RUN npm ci --only=production
+
+# Create directory structure
+RUN mkdir -p models routes middleware
+
+# Copy server code
+COPY server.js .
+COPY models/ models/
+COPY routes/ routes/
+COPY middleware/ middleware/
+
+# Expose the port
+EXPOSE 3000
+
+# Start the server
+CMD ["node", "server.js"]
+EOF
+```
+
+Create the `docker-compose.yml` file:
+
+```bash
+cat > docker-compose.yml << 'EOF'
+version: '3'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: printer-monitor-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres_password}
+      - DB_HOST=db
+      - DB_NAME=${DB_NAME:-printer_monitor}
+      - DB_PORT=5432
+      - JWT_SECRET=${JWT_SECRET:-change_this_in_production}
+      - DEFAULT_ADMIN_USERNAME=${DEFAULT_ADMIN_USERNAME:-admin}
+      - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-admin123}
+      - DEFAULT_ADMIN_EMAIL=${DEFAULT_ADMIN_EMAIL:-admin@example.com}
+    depends_on:
+      - db
+    networks:
+      - printer-monitor-network
+
+  db:
+    image: postgres:14-alpine
+    container_name: printer-monitor-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres_password}
+      - POSTGRES_DB=${DB_NAME:-printer_monitor}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - printer-monitor-network
+
+networks:
+  printer-monitor-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+EOF
+```
+
+### 6. Configure Nginx
+
+Create an Nginx configuration file:
+
+```bash
+sudo nano /etc/nginx/sites-available/printer-monitor
+```
+
+Add the following content:
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;  # Replace with your domain or server IP
+
+    location /api/ {
+        proxy_pass http://localhost:3000/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        proxy_pass http://localhost:3000/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Enable the site and restart Nginx:
+
+```bash
+sudo ln -sf /etc/nginx/sites-available/printer-monitor /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl restart nginx
+```
+
+### 7. Build and start the Docker containers
+
+```bash
+cd ~/printer-monitor
+docker-compose build
+docker-compose up -d
+```
+
+## Post-Installation Steps
+
+### 1. Secure your server with SSL (recommended for production)
+
+Install Certbot and obtain an SSL certificate:
+
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d your-domain.com
+```
+
+### 2. Set up a firewall
+
+```bash
+sudo ufw enable
+sudo ufw allow 'Nginx Full'
+sudo ufw allow ssh
+```
+
+### 3. Access the web interface
+
+Visit your server in a web browser:
+
+- http://your-domain.com (or https:// if you set up SSL)
+- or http://your-server-ip if you don't have a domain
+
+Log in with the admin credentials specified in your .env file:
+
+- Username: admin
+- Password: (the one you set in the .env file)
+
+## Integrating Agents with the Server
+
+To connect your SNMP agents to the server, you'll need to update your Python agent code to include the server integration module.
+
+### Adding server integration to your agent
+
+1. Copy the `agent_integration.py` file to your agent directory
+2. Import and use the ServerIntegration class in your agent code:
+
+```python
+from agent_integration import ServerIntegration
+
+# Initialize server connection
+server = ServerIntegration(
+    server_url="http://your-server-url.com",
+    agent_name="Customer Site Name"
+)
+
+# Register with server
+server.register()
+
+# When you discover a printer, send its data to the server
+def on_printer_discovered(printer_data):
+    server.send_printer_data(printer_data)
+
+# When you collect metrics, send them to the server
+def on_metrics_collected(printer_id, metrics_data):
+    server.send_metrics(printer_id, metrics_data)
+```
 
 ## Troubleshooting
 
-### Agent Issues
+### Check container status
 
-- **Agent not discovering printers**: Check SNMP configuration and firewall settings
-- **Agent not connecting to server**: Verify internet connectivity and server URL
-- **High CPU usage**: Reduce polling frequency in configuration
+```bash
+docker ps
+docker-compose ps
+```
 
-### Server Issues
+### View container logs
 
-- **API not starting**: Check database connection and logs
-- **Database errors**: Verify PostgreSQL is running and accessible
-- **Performance issues**: Consider scaling up server resources
+```bash
+docker-compose logs api
+docker-compose logs db
+```
 
-## Security Considerations
+### Database issues
 
-- All communication between agent and server is encrypted with HTTPS
-- Database access is restricted to the server network
-- API tokens are used for agent authentication
-- JWT tokens with appropriate expiration for user authentication
-- Passwords are hashed using bcrypt
-- Regular security updates for all components
+Connect to the database container:
+
+```bash
+docker exec -it printer-monitor-db psql -U postgres -d printer_monitor
+```
+
+Check if tables were created:
+
+```sql
+\dt
+```
+
+### Restart the services
+
+```bash
+cd ~/printer-monitor
+docker-compose restart
+```
+
+## Maintenance
+
+### Updating the server
+
+Pull the latest code and rebuild:
+
+```bash
+cd ~/printer-monitor
+git pull origin main
+docker-compose down
+docker-compose build
+docker-compose up -d
+```
+
+### Backing up the database
+
+```bash
+cd ~/printer-monitor
+docker exec -t printer-monitor-db pg_dumpall -c -U postgres > backup.sql
+```
+
+### Restoring the database from backup
+
+```bash
+cat backup.sql | docker exec -i printer-monitor-db psql -U postgres
+```
