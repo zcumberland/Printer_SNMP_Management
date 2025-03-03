@@ -54,11 +54,6 @@ sudo systemctl start docker
 sudo usermod -aG docker $USER
 echo "You may need to log out and log back in for Docker permissions to take effect"
 
-# Create directory for the application
-echo "Creating directory structure..."
-mkdir -p ~/printer-monitor
-cd ~/printer-monitor
-
 # Create .env file for configuration
 echo "Creating environment configuration..."
 cat > .env << EOF
@@ -77,90 +72,6 @@ DEFAULT_ADMIN_EMAIL=admin@example.com
 EOF
 
 echo "Remember to edit the .env file with secure passwords!"
-
-# Create directories and files
-echo "Creating server files..."
-mkdir -p models routes middleware
-
-# Copy files from the repository
-git clone https://github.com/zcumberland/Printer_SNMP_Management.git temp
-cp -r temp/server/* .
-rm -rf temp
-
-# Create Docker and Docker Compose files
-echo "Creating Docker configuration..."
-cat > Dockerfile << 'EOF'
-FROM node:16-alpine
-
-WORKDIR /app
-
-# Copy package.json and install dependencies
-COPY package*.json ./
-RUN npm ci --only=production
-
-# Create directory structure
-RUN mkdir -p models routes middleware
-
-# Copy server code
-COPY server.js .
-COPY models/ models/
-COPY routes/ routes/
-COPY middleware/ middleware/
-
-# Expose the port
-EXPOSE 3000
-
-# Start the server
-CMD ["node", "server.js"]
-EOF
-
-cat > compose.yaml << 'EOF'
-services:
-  api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: printer-monitor-api
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    environment:
-      - NODE_ENV=production
-      - PORT=3000
-      - DB_USER=${DB_USER:-postgres}
-      - DB_PASSWORD=${DB_PASSWORD:-postgres_password}
-      - DB_HOST=db
-      - DB_NAME=${DB_NAME:-printer_monitor}
-      - DB_PORT=5432
-      - JWT_SECRET=${JWT_SECRET:-change_this_in_production}
-      - DEFAULT_ADMIN_USERNAME=${DEFAULT_ADMIN_USERNAME:-admin}
-      - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-admin123}
-      - DEFAULT_ADMIN_EMAIL=${DEFAULT_ADMIN_EMAIL:-admin@example.com}
-    depends_on:
-      - db
-    networks:
-      - printer-monitor-network
-
-  db:
-    image: postgres:14-alpine
-    container_name: printer-monitor-db
-    restart: unless-stopped
-    environment:
-      - POSTGRES_USER=${DB_USER:-postgres}
-      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres_password}
-      - POSTGRES_DB=${DB_NAME:-printer_monitor}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - printer-monitor-network
-
-networks:
-  printer-monitor-network:
-    driver: bridge
-
-volumes:
-  postgres_data:
-EOF
 
 # Configure Nginx
 echo "Configuring Nginx..."
@@ -209,8 +120,8 @@ echo ""
 echo "Access your server at: http://$HOSTNAME"
 echo ""
 echo "Important next steps:"
-echo "1. Edit ~/printer-monitor/.env with secure passwords"
-echo "2. Restart the application: cd ~/printer-monitor && sudo docker compose restart"
+echo "1. Edit .env with secure passwords"
+echo "2. Restart the application: sudo docker compose restart"
 echo "3. Set up SSL with: sudo certbot --nginx -d $HOSTNAME"
 echo "4. Implement a firewall: sudo ufw enable && sudo ufw allow 'Nginx Full' && sudo ufw allow ssh"
 echo "--------------------------------------"

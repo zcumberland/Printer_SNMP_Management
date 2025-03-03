@@ -107,17 +107,17 @@ router.put("/:id", authenticateToken, async (req, res) => {
     let paramCount = 1;
 
     if (name) {
-      query += `name = ${paramCount++}`;
+      query += `name = $${paramCount++}`;
       values.push(name);
     }
 
     if (serial_number) {
       if (values.length > 0) query += ", ";
-      query += `serial_number = ${paramCount++}`;
+      query += `serial_number = $${paramCount++}`;
       values.push(serial_number);
     }
 
-    query += ` WHERE id = ${paramCount} RETURNING *`;
+    query += ` WHERE id = $${paramCount} RETURNING *`;
     values.push(printerId);
 
     const result = await pool.query(query, values);

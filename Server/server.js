@@ -4,7 +4,7 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 const dotenv = require("dotenv");
 const path = require("path");
-const { initializeDatabase } = require("/models/db");
+const { initializeDatabase } = require("./models/db");
 
 // Load environment variables
 dotenv.config();
@@ -19,12 +19,12 @@ app.use(express.json({ limit: "10mb" }));
 app.use(morgan("combined")); // Request logging
 
 // Import routes
-const authRoutes = require("/routes/auth");
-const agentRoutes = require("/routes/agents");
-const printerRoutes = require("/routes/printers");
-const dataRoutes = require("/routes/data");
-const userRoutes = require("/routes/users");
-const dashboardRoutes = require("/routes/dashboard");
+const authRoutes = require("./routes/auth");
+const agentRoutes = require("./routes/agents");
+const printerRoutes = require("./routes/printers");
+const dataRoutes = require("./routes/data");
+const userRoutes = require("./routes/users");
+const dashboardRoutes = require("./routes/dashboard");
 
 // Define API routes
 app.use("/api/auth", authRoutes);

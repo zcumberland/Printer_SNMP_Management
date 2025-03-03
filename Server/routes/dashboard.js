@@ -1,194 +1,145 @@
 const express = require("express");
-const bcrypt = require("bcrypt");
 const { pool } = require("../models/db");
-const { authenticateToken, authorize } = require("../middleware/auth");
+const { authenticateToken } = require("../middleware/auth");
 
 const router = express.Router();
 
-// Get all users (admin only)
-router.get("/", authenticateToken, authorize(["admin"]), async (req, res) => {
+// Get dashboard stats
+router.get("/stats", authenticateToken, async (req, res) => {
   try {
+    const client = await pool.connect();
+
+    try {
+      // Get printer count
+      const printerCount = await client.query("SELECT COUNT(*) FROM printers");
+
+      // Get agents count
+      const agentCount = await client.query("SELECT COUNT(*) FROM agents");
+
+      // Get printers with low toner
+      const lowTonerQuery = `
+        SELECT COUNT(DISTINCT p.id)
+        FROM printers p
+        JOIN metrics m ON p.id = m.printer_id
+        WHERE m.timestamp > NOW() - INTERVAL '24 hours'
+        AND (
+          m.toner_levels->>'black' < '10' OR
+          m.toner_levels->>'cyan' < '10' OR
+          m.toner_levels->>'magenta' < '10' OR
+          m.toner_levels->>'yellow' < '10'
+        )
+      `;
+      const lowToner = await client.query(lowTonerQuery);
+
+      // Get printer status distribution
+      const statusDistribution = await client.query(`
+        SELECT status, COUNT(*) as count
+        FROM printers
+        GROUP BY status
+      `);
+
+      // Get printers with errors
+      const errorsQuery = `
+        SELECT COUNT(DISTINCT p.id)
+        FROM printers p
+        JOIN metrics m ON p.id = m.printer_id
+        WHERE m.timestamp > NOW() - INTERVAL '24 hours'
+        AND m.error_state IS NOT NULL
+        AND m.error_state != ''
+      `;
+      const errors = await client.query(errorsQuery);
+
+      // Get recent activity
+      const recentActivityQuery = `
+        SELECT 
+          p.name as printer_name, 
+          p.ip_address,
+          m.error_state,
+          m.status,
+          m.timestamp,
+          CASE
+            WHEN m.error_state IS NOT NULL AND m.error_state != '' THEN 'error'
+            WHEN m.toner_levels->>'black' < '10' OR
+                 m.toner_levels->>'cyan' < '10' OR
+                 m.toner_levels->>'magenta' < '10' OR
+                 m.toner_levels->>'yellow' < '10' THEN 'warning'
+            ELSE 'info'
+          END as activity_type
+        FROM metrics m
+        JOIN printers p ON m.printer_id = p.id
+        WHERE m.timestamp > NOW() - INTERVAL '24 hours'
+        ORDER BY m.timestamp DESC
+        LIMIT 10
+      `;
+      const recentActivity = await client.query(recentActivityQuery);
+
+      res.json({
+        printerCount: parseInt(printerCount.rows[0].count),
+        agentCount: parseInt(agentCount.rows[0].count),
+        lowTonerCount: parseInt(lowToner.rows[0].count),
+        errorCount: parseInt(errors.rows[0].count),
+        statusDistribution: statusDistribution.rows,
+        recentActivity: recentActivity.rows,
+      });
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error("Error fetching dashboard stats:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Get printer total by day
+router.get("/printer-totals", authenticateToken, async (req, res) => {
+  try {
+    // Get printer count by day for the last 30 days
     const result = await pool.query(`
-      SELECT id, username, email, role, created_at, last_login
-      FROM users
-      ORDER BY username
+      SELECT 
+        date_trunc('day', created_at)::date as date,
+        COUNT(*) as count
+      FROM printers
+      WHERE created_at > NOW() - INTERVAL '30 days'
+      GROUP BY date_trunc('day', created_at)
+      ORDER BY date_trunc('day', created_at)
     `);
 
     res.json(result.rows);
   } catch (err) {
-    console.error("Error fetching users:", err);
+    console.error("Error fetching printer totals:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
 
-// Create new user (admin only)
-router.post("/", authenticateToken, authorize(["admin"]), async (req, res) => {
+// Get page count by day
+router.get("/page-counts", authenticateToken, async (req, res) => {
   try {
-    const { username, email, password, role } = req.body;
+    // Get total page count increase per day for the last 30 days
+    const result = await pool.query(`
+      WITH daily_max AS (
+        SELECT 
+          date_trunc('day', timestamp)::date as date,
+          printer_id,
+          MAX(page_count) as max_count
+        FROM metrics
+        WHERE 
+          timestamp > NOW() - INTERVAL '30 days'
+          AND page_count IS NOT NULL
+        GROUP BY date_trunc('day', timestamp)::date, printer_id
+      )
+      SELECT 
+        date,
+        SUM(max_count) as total_pages
+      FROM daily_max
+      GROUP BY date
+      ORDER BY date
+    `);
 
-    if (!username || !email || !password) {
-      return res
-        .status(400)
-        .json({ error: "Username, email and password required" });
-    }
-
-    // Check if user exists
-    const existingUser = await pool.query(
-      "SELECT id FROM users WHERE username = $1 OR email = $2",
-      [username, email]
-    );
-
-    if (existingUser.rows.length > 0) {
-      return res
-        .status(409)
-        .json({ error: "Username or email already exists" });
-    }
-
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Create user
-    const result = await pool.query(
-      `INSERT INTO users (username, email, password, role) 
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, username, email, role`,
-      [username, email, hashedPassword, role || "user"]
-    );
-
-    res.status(201).json(result.rows[0]);
+    res.json(result.rows);
   } catch (err) {
-    console.error("Error creating user:", err);
+    console.error("Error fetching page counts:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
-
-// Get user by ID (admin or self)
-router.get("/:id", authenticateToken, async (req, res) => {
-  try {
-    const userId = req.params.id;
-
-    // Only admins can view other users
-    if (req.user.id.toString() !== userId && req.user.role !== "admin") {
-      return res.status(403).json({ error: "Unauthorized to view this user" });
-    }
-
-    const result = await pool.query(
-      `SELECT id, username, email, role, created_at, last_login
-       FROM users WHERE id = $1`,
-      [userId]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error("Error fetching user:", err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
-
-// Update user (admin or self)
-router.put("/:id", authenticateToken, async (req, res) => {
-  try {
-    const userId = req.params.id;
-    const { email, password, role } = req.body;
-
-    // Only admins can update role or other users
-    if (req.user.id.toString() !== userId && req.user.role !== "admin") {
-      return res
-        .status(403)
-        .json({ error: "Unauthorized to update this user" });
-    }
-
-    // Non-admins cannot change their role
-    if (role && req.user.role !== "admin") {
-      return res.status(403).json({ error: "Unauthorized to change role" });
-    }
-
-    // Start building the query
-    let query = "UPDATE users SET ";
-    const values = [];
-    let paramCount = 1;
-
-    if (email) {
-      query += `email = $${paramCount++}`;
-      values.push(email);
-    }
-
-    if (password) {
-      if (values.length > 0) query += ", ";
-
-      // Hash the new password
-      const hashedPassword = await bcrypt.hash(password, 10);
-      query += `password = $${paramCount++}`;
-      values.push(hashedPassword);
-    }
-
-    if (role && req.user.role === "admin") {
-      if (values.length > 0) query += ", ";
-      query += `role = $${paramCount++}`;
-      values.push(role);
-    }
-
-    if (values.length === 0) {
-      return res.status(400).json({ error: "No update fields provided" });
-    }
-
-    query += ` WHERE id = $${paramCount} RETURNING id, username, email, role`;
-    values.push(userId);
-
-    const result = await pool.query(query, values);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error("Error updating user:", err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
-
-// Delete user (admin only)
-router.delete(
-  "/:id",
-  authenticateToken,
-  authorize(["admin"]),
-  async (req, res) => {
-    try {
-      const userId = req.params.id;
-
-      // Prevent deleting the last admin
-      if (req.user.id.toString() === userId) {
-        const adminCount = await pool.query(
-          "SELECT COUNT(*) FROM users WHERE role = 'admin'"
-        );
-
-        if (parseInt(adminCount.rows[0].count) <= 1) {
-          return res
-            .status(400)
-            .json({ error: "Cannot delete the last admin user" });
-        }
-      }
-
-      const result = await pool.query(
-        "DELETE FROM users WHERE id = $1 RETURNING id",
-        [userId]
-      );
-
-      if (result.rows.length === 0) {
-        return res.status(404).json({ error: "User not found" });
-      }
-
-      res.json({ message: "User deleted successfully" });
-    } catch (err) {
-      console.error("Error deleting user:", err);
-      res.status(500).json({ error: "Server error" });
-    }
-  }
-);
 
 module.exports = router;
