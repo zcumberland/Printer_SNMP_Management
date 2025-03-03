@@ -17,7 +17,7 @@ if ! command -v docker &> /dev/null; then
 fi
 
 # Check if Docker Compose is installed
-if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
+if ! command -v docker-compose &> /dev/null && ! docker compose &> /dev/null; then
     echo "Docker Compose is not installed or not available. Please install Docker Compose."
     echo "Visit https://docs.docker.com/compose/install/ for installation instructions."
     exit 1
@@ -206,6 +206,9 @@ EOL
     if [ ! -f "../FrontEnd/nginx.conf" ]; then
         echo "Creating nginx configuration..."
         cat > "../FrontEnd/nginx.conf" << EOL
+# Add rate limiting zone
+limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+
 server {
     listen 80;
     server_name localhost;
@@ -279,9 +282,7 @@ server {
         proxy_read_timeout 60s;
     }
     
-    # Add rate limiting zone
-    limit_req_zone \$binary_remote_addr zone=api:10m rate=10r/s;
-}
+    }
 EOL
     fi
 fi

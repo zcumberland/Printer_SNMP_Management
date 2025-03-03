@@ -68,7 +68,7 @@ install_dependencies() {
 install_dependencies
 
 # Navigate to frontend directory
-cd "$(dirname "$0")/../FrontEnd"
+cd "$(dirname "$0")/../../FrontEnd"
 FRONTEND_DIR=$(pwd)
 echo "Setting up frontend in: $FRONTEND_DIR"
 

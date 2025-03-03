@@ -55,7 +55,7 @@ EOF
 chmod +x start_dev.sh
 
 # Create production startup script with Docker
-cat > start_production.sh << 'EOF'
+cat > start_prod.sh << 'EOF'
 #!/bin/bash
 # Start the complete system in production mode using Docker
 
@@ -71,7 +71,7 @@ echo "Access the system at: http://localhost"
 echo "Admin username: admin"
 echo "Admin password: $(grep DEFAULT_ADMIN_PASSWORD .env | cut -d '=' -f2)"
 EOF
-chmod +x start_production.sh
+chmod +x start_prod.sh
 
 # Create Windows batch files
 cat > start_dev.bat << 'EOF'
@@ -104,7 +104,7 @@ echo "Complete system setup finished!"
 echo ""
 echo "You can now start the entire system with:"
 echo "  For development: ./start_dev.sh"
-echo "  For production: ./start_production.sh"
+echo "  For production: ./start_prod.sh"
 echo ""
 echo "To set up the agent on monitoring machines:"
 echo "  1. Copy the Agent directory to each monitoring machine"

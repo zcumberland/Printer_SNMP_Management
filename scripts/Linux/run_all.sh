@@ -40,11 +40,16 @@ echo "Server started with PID: $SERVER_PID"
 # Wait briefly for server to initialize
 sleep 3
 
-# Start agent in background
+# Start agent in background, but only if server started successfully
 echo "Starting agent..."
-./run_agent.sh &
-AGENT_PID=$!
-echo "Agent started with PID: $AGENT_PID"
+if kill -0 $SERVER_PID 2>/dev/null; then
+    ./run_agent.sh &
+    AGENT_PID=$!
+    echo "Agent started with PID: $AGENT_PID"
+else
+    echo "Server failed to start. Not starting the agent."
+    exit 1
+fi
 
 # Start frontend (this will stay in foreground)
 echo "Starting frontend..."
