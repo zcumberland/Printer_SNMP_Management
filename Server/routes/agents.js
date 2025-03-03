@@ -165,24 +165,165 @@ router.put(
   async (req, res) => {
     try {
       const agentId = req.params.id;
-      const { name, status } = req.body;
+      const { name, status, organization_id } = req.body;
 
       if (!name) {
         return res.status(400).json({ error: "Name is required" });
       }
 
-      const result = await pool.query(
-        "UPDATE agents SET name = $1, status = $2 WHERE id = $3 RETURNING *",
-        [name, status || "active", agentId]
+      const client = await pool.connect();
+      
+      try {
+        await client.query('BEGIN');
+        
+        const result = await client.query(
+          "UPDATE agents SET name = $1, status = $2 WHERE id = $3 RETURNING *",
+          [name, status || "active", agentId]
+        );
+
+        if (result.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({ error: "Agent not found" });
+        }
+        
+        // Update organization association if provided
+        if (organization_id) {
+          // First remove existing association
+          await client.query(
+            "DELETE FROM organization_agents WHERE agent_id = $1",
+            [agentId]
+          );
+          
+          // Add new association
+          await client.query(
+            "INSERT INTO organization_agents (organization_id, agent_id) VALUES ($1, $2)",
+            [organization_id, agentId]
+          );
+        }
+        
+        await client.query('COMMIT');
+        res.json(result.rows[0]);
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+    } catch (err) {
+      console.error("Error updating agent:", err);
+      res.status(500).json({ error: "Server error" });
+    }
+  }
+);
+
+// Get agent configuration
+router.get("/config/:agent_id", authenticateAgent, async (req, res) => {
+  try {
+    const agentId = req.agent.id;
+    
+    // Get the agent's organization
+    const orgResult = await pool.query(
+      `SELECT o.id FROM organizations o
+       JOIN organization_agents oa ON o.id = oa.organization_id
+       WHERE oa.agent_id = $1`,
+      [agentId]
+    );
+    
+    // Get the agent configuration
+    const configResult = await pool.query(
+      `SELECT * FROM agent_configs WHERE agent_id = $1`,
+      [agentId]
+    );
+    
+    let config;
+    
+    if (configResult.rows.length > 0) {
+      config = configResult.rows[0];
+    } else {
+      // Create default config if none exists
+      const organization_id = orgResult.rows.length > 0 ? orgResult.rows[0].id : null;
+      
+      const insertResult = await pool.query(
+        `INSERT INTO agent_configs 
+         (agent_id, organization_id, subnet_ranges, snmp_community, snmp_timeout, polling_interval, discovery_interval)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING *`,
+        [agentId, organization_id, JSON.stringify(["192.168.1.0/24"]), "public", 2, 300, 86400]
+      );
+      
+      config = insertResult.rows[0];
+    }
+    
+    res.json({
+      subnets: config.subnet_ranges,
+      snmp_community: config.snmp_community,
+      snmp_timeout: config.snmp_timeout,
+      polling_interval: config.polling_interval,
+      discovery_interval: config.discovery_interval
+    });
+  } catch (err) {
+    console.error("Error fetching agent configuration:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Update agent configuration (admin only)
+router.put(
+  "/config/:id",
+  authenticateToken,
+  authorize(["admin"]),
+  async (req, res) => {
+    try {
+      const agentId = req.params.id;
+      const { subnet_ranges, snmp_community, snmp_timeout, polling_interval, discovery_interval } = req.body;
+
+      // Find the agent
+      const agentResult = await pool.query(
+        "SELECT * FROM agents WHERE id = $1",
+        [agentId]
       );
 
-      if (result.rows.length === 0) {
+      if (agentResult.rows.length === 0) {
         return res.status(404).json({ error: "Agent not found" });
       }
 
-      res.json(result.rows[0]);
+      // Get the agent's organization
+      const orgResult = await pool.query(
+        `SELECT o.id FROM organizations o
+         JOIN organization_agents oa ON o.id = oa.organization_id
+         WHERE oa.agent_id = $1`,
+        [agentId]
+      );
+      
+      const organization_id = orgResult.rows.length > 0 ? orgResult.rows[0].id : null;
+
+      // Update or insert config
+      const configResult = await pool.query(
+        `INSERT INTO agent_configs 
+         (agent_id, organization_id, subnet_ranges, snmp_community, snmp_timeout, polling_interval, discovery_interval)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (agent_id) DO UPDATE SET
+         subnet_ranges = $3,
+         snmp_community = $4,
+         snmp_timeout = $5,
+         polling_interval = $6,
+         discovery_interval = $7,
+         updated_at = NOW()
+         RETURNING *`,
+        [
+          agentId, 
+          organization_id,
+          subnet_ranges ? JSON.stringify(subnet_ranges) : JSON.stringify(["192.168.1.0/24"]),
+          snmp_community || "public",
+          snmp_timeout || 2,
+          polling_interval || 300,
+          discovery_interval || 86400
+        ]
+      );
+
+      res.json(configResult.rows[0]);
     } catch (err) {
-      console.error("Error updating agent:", err);
+      console.error("Error updating agent configuration:", err);
       res.status(500).json({ error: "Server error" });
     }
   }

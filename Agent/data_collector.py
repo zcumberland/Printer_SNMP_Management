@@ -1,591 +1,660 @@
-#!/usr/bin/env python3
-"""
-Printer SNMP Data Collector
-
-This script discovers printers on the network and collects information using SNMP.
-It stores the data locally and can send it to a central server.
-"""
-
+import configparser
 import os
-import sys
 import time
+import uuid
 import json
 import logging
-import socket
-import uuid
-import sqlite3
 import ipaddress
-import argparse
-import configparser
+import sqlite3
+import threading
+from pysnmp.hlapi import *
 from datetime import datetime
-from threading import Thread, Lock
-import schedule
+from agent_integration import ServerIntegration
 
-# Import the SNMP library
-try:
-    from pysnmp.hlapi import *
-except ImportError:
-    print("Error: pysnmp library not found. Install it using 'pip install pysnmp'")
-    sys.exit(1)
-
-# Import the server integration module (if available)
-try:
-    from agent_integration import ServerIntegration
-    SERVER_INTEGRATION_AVAILABLE = True
-except ImportError:
-    SERVER_INTEGRATION_AVAILABLE = False
-
-# Setup logging
+# Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("printer_monitor.log"),
+        logging.FileHandler("agent.log"),
         logging.StreamHandler()
     ]
 )
-logger = logging.getLogger("PrinterCollector")
+logger = logging.getLogger(__name__)
 
 # Default configuration
 DEFAULT_CONFIG = {
-    "agent": {
-        "id": str(uuid.uuid4()),
-        "name": socket.gethostname(),
-        "polling_interval": 300,  # seconds
-        "discovery_interval": 86400,  # 24 hours in seconds
-        "data_dir": "./data"
+    'agent': {
+        'id': '',
+        'name': 'PrinterMonitorAgent',
+        'polling_interval': '300',
+        'discovery_interval': '86400',
+        'data_dir': './data'
     },
-    "server": {
-        "enabled": False,
-        "url": "http://your-server-url.com/api",
+    'server': {
+        'enabled': 'true',
+        'url': 'http://localhost:3000/api'
     },
-    "network": {
-        "subnets": ["192.168.1.0/24"],
-        "snmp_community": "public",
-        "snmp_timeout": 2
+    'network': {
+        'subnets': '["192.168.1.0/24"]',
+        'snmp_community': 'public',
+        'snmp_timeout': '2'
     }
 }
 
-class PrinterCollector:
-    def __init__(self, config_file="config.ini"):
-        """Initialize the printer data collector"""
-        self.config = self._load_config(config_file)
-        self.db_path = os.path.join(self.config["agent"]["data_dir"], "printers.db")
-        self.lock = Lock()
-        self._setup_data_directory()
-        self._setup_database()
+class PrinterMonitorAgent:
+    def __init__(self, config_file='config.ini'):
+        self.config_file = config_file
+        self.config = configparser.ConfigParser()
+        self.load_config()
+        
+        self.setup_agent_id()
+        
+        # Set up data directory
+        os.makedirs(self.config['agent']['data_dir'], exist_ok=True)
+        
+        # Set up database
+        self.db_path = os.path.join(self.config['agent']['data_dir'], 'printers.db')
+        self.init_database()
         
         # Set up server integration if enabled
         self.server = None
-        if self.config["server"]["enabled"] and SERVER_INTEGRATION_AVAILABLE:
+        if self.config['server'].getboolean('enabled'):
             self.server = ServerIntegration(
-                server_url=self.config["server"]["url"],
-                agent_id=self.config["agent"]["id"],
-                agent_name=self.config["agent"]["name"]
+                self.config['server']['url'],
+                self.config['agent']['id'],
+                self.config['agent']['name']
             )
             
-    def _load_config(self, config_file):
+        # Initialize state
+        self.printers = {}
+        self.discovery_running = False
+        self.collection_running = False
+        self.stop_threads = False
+
+    def load_config(self):
         """Load configuration from file or create default"""
-        config = DEFAULT_CONFIG.copy()
+        # Set default configuration
+        for section, options in DEFAULT_CONFIG.items():
+            if not self.config.has_section(section):
+                self.config.add_section(section)
+            for option, value in options.items():
+                self.config.set(section, option, value)
         
-        if os.path.exists(config_file):
-            try:
-                parser = configparser.ConfigParser()
-                parser.read(config_file)
-                
-                for section in parser.sections():
-                    if section in config:
-                        for key, value in parser.items(section):
-                            if key in config[section]:
-                                # Convert types appropriately
-                                if isinstance(config[section][key], int):
-                                    config[section][key] = parser.getint(section, key)
-                                elif isinstance(config[section][key], float):
-                                    config[section][key] = parser.getfloat(section, key)
-                                elif isinstance(config[section][key], bool):
-                                    config[section][key] = parser.getboolean(section, key)
-                                elif isinstance(config[section][key], list) and key == "subnets":
-                                    # Parse the subnets list from string representation
-                                    try:
-                                        config[section][key] = json.loads(parser.get(section, key))
-                                    except:
-                                        # Fallback to default if parsing fails
-                                        logger.error(f"Error parsing subnet list, using default")
-                                else:
-                                    config[section][key] = parser.get(section, key)
-                
-                logger.info(f"Loaded configuration from {config_file}")
-            except Exception as e:
-                logger.error(f"Error loading config: {e}")
-                logger.info("Using default configuration")
-                self._save_config(config, config_file)
+        # Load from file if exists
+        if os.path.exists(self.config_file):
+            self.config.read(self.config_file)
         else:
-            logger.info(f"Config file {config_file} not found, creating with defaults")
-            self._save_config(config, config_file)
-            
-        return config
+            # Save default configuration
+            with open(self.config_file, 'w') as f:
+                self.config.write(f)
     
-    def _save_config(self, config, config_file):
-        """Save configuration to file"""
-        try:
-            parser = configparser.ConfigParser()
-            
-            for section, values in config.items():
-                parser[section] = {}
-                for key, value in values.items():
-                    if isinstance(value, list):
-                        parser[section][key] = json.dumps(value)
-                    else:
-                        parser[section][key] = str(value)
-            
-            os.makedirs(os.path.dirname(os.path.abspath(config_file)), exist_ok=True)
-            with open(config_file, 'w') as f:
-                parser.write(f)
-                
-            logger.info(f"Saved configuration to {config_file}")
-        except Exception as e:
-            logger.error(f"Error saving config: {e}")
-    
-    def _setup_data_directory(self):
-        """Create data directory if it doesn't exist"""
-        os.makedirs(self.config["agent"]["data_dir"], exist_ok=True)
-        logger.info(f"Data directory: {self.config['agent']['data_dir']}")
+    def setup_agent_id(self):
+        """Set up agent ID from file or create new one"""
+        agent_id_file = os.path.join(os.path.dirname(self.config_file), 'agent_id.txt')
         
-    def _setup_database(self):
-        """Set up the SQLite database for local storage"""
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
+        # Check if we already have an agent ID in config
+        if not self.config['agent']['id']:
+            # Check if we have an agent ID file
+            if os.path.exists(agent_id_file):
+                with open(agent_id_file, 'r') as f:
+                    agent_id = f.read().strip()
+                    if agent_id:
+                        self.config['agent']['id'] = agent_id
+                        logger.info(f"Loaded agent ID from file: {agent_id}")
+            
+            # If still no agent ID, generate one
+            if not self.config['agent']['id']:
+                agent_id = str(uuid.uuid4())
+                self.config['agent']['id'] = agent_id
+                logger.info(f"Generated new agent ID: {agent_id}")
                 
-                # Create printers table
-                cursor.execute('''
-                CREATE TABLE IF NOT EXISTS printers (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ip_address TEXT NOT NULL,
-                    serial_number TEXT,
-                    model TEXT,
-                    name TEXT,
-                    last_seen TIMESTAMP,
-                    server_id INTEGER DEFAULT NULL,
-                    UNIQUE(ip_address)
-                )
-                ''')
+                # Save agent ID to file
+                with open(agent_id_file, 'w') as f:
+                    f.write(agent_id)
                 
-                # Create metrics table
-                cursor.execute('''
-                CREATE TABLE IF NOT EXISTS metrics (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    printer_id INTEGER,
-                    timestamp TIMESTAMP NOT NULL,
-                    page_count INTEGER,
-                    toner_levels TEXT,
-                    status TEXT,
-                    error_state TEXT,
-                    raw_data TEXT,
-                    sent_to_server BOOLEAN DEFAULT 0,
-                    FOREIGN KEY (printer_id) REFERENCES printers(id)
-                )
-                ''')
-                
-                conn.commit()
-                logger.info("Database setup complete")
-        except Exception as e:
-            logger.error(f"Database setup error: {e}")
-            sys.exit(1)
+                # Save updated config
+                with open(self.config_file, 'w') as f:
+                    self.config.write(f)
+    
+    def init_database(self):
+        """Initialize SQLite database for storing printer data"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Create printers table
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS printers (
+            id INTEGER PRIMARY KEY,
+            ip_address TEXT UNIQUE,
+            serial_number TEXT,
+            model TEXT,
+            name TEXT,
+            status TEXT,
+            last_seen TIMESTAMP
+        )
+        ''')
+        
+        # Create metrics table
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS metrics (
+            id INTEGER PRIMARY KEY,
+            printer_id INTEGER,
+            timestamp TIMESTAMP,
+            page_count INTEGER,
+            toner_levels TEXT,
+            status TEXT,
+            error_state TEXT,
+            raw_data TEXT,
+            FOREIGN KEY (printer_id) REFERENCES printers (id)
+        )
+        ''')
+        
+        conn.commit()
+        conn.close()
     
     def discover_printers(self):
-        """Discover printers on the network using SNMP"""
-        logger.info("Starting printer discovery")
-        discovered = []
+        """Discover printers on the network"""
+        if self.discovery_running:
+            logger.info("Discovery already running, skipping...")
+            return
         
-        for subnet in self.config["network"]["subnets"]:
-            try:
-                network = ipaddress.ip_network(subnet)
-                logger.info(f"Scanning subnet: {subnet}")
-                
-                # For small networks, scan all IPs
-                # For larger networks, you might want to implement a more efficient scanning method
-                total_ips = len(list(network.hosts()))
-                logger.info(f"Scanning {total_ips} IP addresses in network {subnet}")
-                
-                for ip in network.hosts():
-                    ip_str = str(ip)
-                    if self._check_snmp_device(ip_str):
-                        printer_info = self._get_printer_info(ip_str)
-                        if printer_info:
-                            printer_id = self._save_printer(printer_info)
-                            discovered.append(printer_info)
-                            
-                            # Send to server if enabled
-                            if self.server:
-                                self.server.send_printer_data(printer_info)
-            except Exception as e:
-                logger.error(f"Error scanning subnet {subnet}: {e}")
+        self.discovery_running = True
+        logger.info("Starting printer discovery...")
         
-        logger.info(f"Discovery complete. Found {len(discovered)} printers")
-        return discovered
-    
-    def _check_snmp_device(self, ip):
-        """Check if an IP address responds to SNMP and is a printer"""
         try:
-            # System description OID
-            oid = '1.3.6.1.2.1.1.1.0'
-            community = self.config["network"]["snmp_community"]
-            timeout = self.config["network"]["snmp_timeout"]
+            # Get network configuration
+            subnets = json.loads(self.config['network']['subnets'])
+            community = self.config['network']['snmp_community']
+            timeout = int(self.config['network']['snmp_timeout'])
             
-            error_indication, error_status, error_index, var_binds = next(
-                getCmd(SnmpEngine(),
-                       CommunityData(community),
-                       UdpTransportTarget((ip, 161), timeout=timeout, retries=1),
-                       ContextData(),
-                       ObjectType(ObjectIdentity(oid)))
+            new_printers = []
+            
+            # Scan each subnet
+            for subnet in subnets:
+                logger.info(f"Scanning subnet {subnet}")
+                network = ipaddress.ip_network(subnet)
+                
+                # Skip scan for very large networks
+                if network.num_addresses > 1024:
+                    logger.warning(f"Subnet {subnet} is too large (> 1024 addresses), skipping")
+                    continue
+                
+                # Scan each IP in the subnet
+                for ip in network.hosts():
+                    if self.stop_threads:
+                        logger.info("Discovery thread stopped")
+                        self.discovery_running = False
+                        return
+                    
+                    ip_str = str(ip)
+                    
+                    # Check if this is a printer via SNMP
+                    if self._check_snmp_device(ip_str, community, timeout):
+                        logger.info(f"Found printer at {ip_str}")
+                        new_printers.append(ip_str)
+                        
+                        # Add to database
+                        self._add_printer_to_db(ip_str)
+            
+            logger.info(f"Discovery completed. Found {len(new_printers)} printers.")
+            
+            # Send discovery results to server
+            if self.server and new_printers:
+                self.server.send_printer_data(self._get_printers_from_db())
+        except Exception as e:
+            logger.error(f"Error in printer discovery: {e}")
+        finally:
+            self.discovery_running = False
+    
+    def _check_snmp_device(self, ip, community, timeout):
+        """Check if device at IP is a printer via SNMP"""
+        try:
+            # Query system description
+            errorIndication, errorStatus, errorIndex, varBinds = next(
+                getCmd(
+                    SnmpEngine(),
+                    CommunityData(community),
+                    UdpTransportTarget((ip, 161), timeout=timeout),
+                    ContextData(),
+                    ObjectType(ObjectIdentity('1.3.6.1.2.1.1.1.0'))  # sysDescr
+                )
             )
             
-            if error_indication or error_status:
+            if errorIndication or errorStatus:
                 return False
             
-            # Check if it's a printer (simple check - can be improved)
-            for var_bind in var_binds:
-                value = str(var_bind[1])
-                if any(keyword in value.lower() for keyword in ['print', 'hp', 'xerox', 'canon', 'epson', 'brother', 'ricoh', 'lexmark']):
-                    logger.info(f"Found printer at {ip}: {value}")
+            # Check if this is a printer
+            for varBind in varBinds:
+                value = str(varBind[1])
+                # Look for printer-related keywords in the description
+                if any(keyword in value.lower() for keyword in ['printer', 'print', 'laserjet', 'officejet', 'imagerunner', 'workcentre', 'lexmark', 'kyocera']):
                     return True
             
             return False
         except Exception as e:
-            logger.debug(f"SNMP check failed for {ip}: {e}")
+            logger.debug(f"SNMP error for {ip}: {e}")
             return False
     
-    def _get_printer_info(self, ip):
-        """Get detailed information about a printer using SNMP"""
+    def _add_printer_to_db(self, ip):
+        """Add a printer to the database"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
         try:
-            # OIDs for common printer information
-            oids = {
-                'model': '1.3.6.1.2.1.25.3.2.1.3.1',
-                'name': '1.3.6.1.2.1.1.5.0',
-                'serial': '1.3.6.1.2.1.43.5.1.1.17.1'  # This OID might vary by manufacturer
-            }
-            
-            info = {'ip_address': ip}
-            community = self.config["network"]["snmp_community"]
-            
-            for key, oid in oids.items():
-                error_indication, error_status, error_index, var_binds = next(
-                    getCmd(SnmpEngine(),
-                           CommunityData(community),
-                           UdpTransportTarget((ip, 161)),
-                           ContextData(),
-                           ObjectType(ObjectIdentity(oid)))
-                )
-                
-                if not error_indication and not error_status:
-                    for var_bind in var_binds:
-                        info[key] = str(var_bind[1])
-            
-            # If we couldn't get the serial number, mark it as unknown
-            if 'serial' not in info:
-                info['serial'] = 'UNKNOWN'
-                
-            logger.info(f"Retrieved printer info: {info}")
-            return info
+            cursor.execute(
+                "INSERT OR IGNORE INTO printers (ip_address, last_seen) VALUES (?, ?)",
+                (ip, datetime.now().isoformat())
+            )
+            conn.commit()
         except Exception as e:
-            logger.error(f"Error getting printer info for {ip}: {e}")
-            return None
+            logger.error(f"Error adding printer to database: {e}")
+        finally:
+            conn.close()
     
-    def _save_printer(self, printer_info):
-        """Save or update printer information in the database"""
+    def _get_printers_from_db(self):
+        """Get all printers from the database"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
         try:
-            with self.lock, sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
-                # Check if printer already exists
-                cursor.execute(
-                    "SELECT id, server_id FROM printers WHERE ip_address = ?",
-                    (printer_info['ip_address'],)
-                )
-                result = cursor.fetchone()
-                
-                if result:
-                    # Update existing printer
-                    printer_id = result[0]
-                    server_id = result[1]
-                    cursor.execute(
-                        """UPDATE printers 
-                           SET model = ?, name = ?, 
-                               serial_number = ?, last_seen = ? 
-                           WHERE id = ?""",
-                        (
-                            printer_info.get('model', ''),
-                            printer_info.get('name', ''),
-                            printer_info.get('serial', 'UNKNOWN'),
-                            datetime.now().isoformat(),
-                            printer_id
-                        )
-                    )
-                    logger.info(f"Updated printer: {printer_info['ip_address']}")
-                else:
-                    # Insert new printer
-                    cursor.execute(
-                        """INSERT INTO printers 
-                           (ip_address, model, name, serial_number, last_seen) 
-                           VALUES (?, ?, ?, ?, ?)""",
-                        (
-                            printer_info['ip_address'],
-                            printer_info.get('model', ''),
-                            printer_info.get('name', ''),
-                            printer_info.get('serial', 'UNKNOWN'),
-                            datetime.now().isoformat()
-                        )
-                    )
-                    printer_id = cursor.lastrowid
-                    server_id = None
-                    logger.info(f"Added new printer: {printer_info['ip_address']}")
-                
-                conn.commit()
-                return printer_id
+            cursor.execute("SELECT * FROM printers")
+            printers = [dict(row) for row in cursor.fetchall()]
+            return printers
         except Exception as e:
-            logger.error(f"Error saving printer: {e}")
-            return None
+            logger.error(f"Error getting printers from database: {e}")
+            return []
+        finally:
+            conn.close()
     
     def collect_metrics(self):
-        """Collect metrics from all known printers"""
-        logger.info("Starting metrics collection")
+        """Collect metrics from discovered printers"""
+        if self.collection_running:
+            logger.info("Collection already running, skipping...")
+            return
+        
+        self.collection_running = True
+        logger.info("Starting metrics collection...")
         
         try:
-            with self.lock, sqlite3.connect(self.db_path) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
+            # Get network configuration
+            community = self.config['network']['snmp_community']
+            timeout = int(self.config['network']['snmp_timeout'])
+            
+            # Get printers from database
+            printers = self._get_printers_from_db()
+            
+            metrics_data = []
+            
+            for printer in printers:
+                if self.stop_threads:
+                    logger.info("Collection thread stopped")
+                    self.collection_running = False
+                    return
                 
-                # Get all printers
-                cursor.execute("SELECT * FROM printers")
-                printers = cursor.fetchall()
+                ip = printer['ip_address']
+                printer_id = printer['id']
                 
-                for printer in printers:
-                    try:
-                        metrics = self._get_printer_metrics(dict(printer))
-                        if metrics:
-                            self._save_metrics(printer['id'], metrics)
-                            
-                            # Send to server if enabled
-                            if self.server and printer['server_id'] is not None:
-                                self.server.send_metrics(printer['server_id'], metrics)
-                    except Exception as e:
-                        logger.error(f"Error collecting metrics for printer {printer['ip_address']}: {e}")
+                logger.info(f"Collecting metrics from printer at {ip}")
                 
-                logger.info(f"Completed metrics collection for {len(printers)} printers")
+                try:
+                    # Collect printer information
+                    info = self._get_printer_info(ip, community, timeout)
+                    
+                    # Update printer details in database
+                    self._update_printer_info(printer_id, ip, info)
+                    
+                    # Collect metrics
+                    metrics = self._get_printer_metrics(ip, community, timeout)
+                    
+                    if metrics:
+                        # Add to metrics to database
+                        metric_id = self._add_metrics_to_db(printer_id, metrics)
+                        metrics['id'] = metric_id
+                        metrics['printer_id'] = printer_id
+                        metrics_data.append(metrics)
+                except Exception as e:
+                    logger.error(f"Error collecting metrics from {ip}: {e}")
+            
+            logger.info(f"Metrics collection completed for {len(metrics_data)} printers.")
+            
+            # Send metrics to server
+            if self.server and metrics_data:
+                self.server.send_metrics(metrics_data)
         except Exception as e:
             logger.error(f"Error in metrics collection: {e}")
+        finally:
+            self.collection_running = False
     
-    def _get_printer_metrics(self, printer):
-        """Get current metrics from a printer using SNMP"""
+    def _get_printer_info(self, ip, community, timeout):
+        """Get printer information via SNMP"""
+        info = {}
+        
         try:
-            ip = printer['ip_address']
-            
-            # OIDs for common printer metrics
+            # OIDs to query for printer information
             oids = {
-                'page_count': '1.3.6.1.2.1.43.10.2.1.4.1.1',  # Total pages printed
-                'status': '1.3.6.1.2.1.25.3.5.1.1.1',  # Printer status
-                'error_state': '1.3.6.1.2.1.25.3.5.1.2.1',  # Error state
-                # Toner levels - these OIDs might vary by manufacturer
-                'black_toner': '1.3.6.1.2.1.43.11.1.1.9.1.1',
-                'cyan_toner': '1.3.6.1.2.1.43.11.1.1.9.1.2',
-                'magenta_toner': '1.3.6.1.2.1.43.11.1.1.9.1.3',
-                'yellow_toner': '1.3.6.1.2.1.43.11.1.1.9.1.4'
+                'serial': '1.3.6.1.2.1.43.5.1.1.17.1',  # prtGeneralSerialNumber
+                'model': '1.3.6.1.2.1.25.3.2.1.3.1',    # hrDeviceDescr
+                'name': '1.3.6.1.2.1.1.5.0',            # sysName
+                'status': '1.3.6.1.2.1.43.17.6.1.5.1.1'  # prtAlertDescription
             }
-            
-            metrics = {
-                'timestamp': datetime.now().isoformat(),
-                'toner_levels': {}
-            }
-            
-            community = self.config["network"]["snmp_community"]
             
             for key, oid in oids.items():
-                error_indication, error_status, error_index, var_binds = next(
-                    getCmd(SnmpEngine(),
-                           CommunityData(community),
-                           UdpTransportTarget((ip, 161)),
-                           ContextData(),
-                           ObjectType(ObjectIdentity(oid)))
-                )
-                
-                if not error_indication and not error_status:
-                    for var_bind in var_binds:
-                        value = str(var_bind[1])
-                        # Handle special cases for toner
-                        if key.endswith('_toner'):
-                            color = key.replace('_toner', '')
-                            metrics['toner_levels'][color] = value
-                        else:
-                            metrics[key] = value
-            
-            # Convert toner_levels dict to JSON string
-            metrics['toner_levels'] = json.dumps(metrics.get('toner_levels', {}))
-            metrics['raw_data'] = json.dumps(metrics)  # Store all data for future reference
-            
-            logger.info(f"Collected metrics for {ip}")
-            return metrics
-        except Exception as e:
-            logger.error(f"Error getting metrics for {printer['ip_address']}: {e}")
-            return None
-    
-    def _save_metrics(self, printer_id, metrics):
-        """Save metrics to the database"""
-        try:
-            with self.lock, sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
-                cursor.execute(
-                    """INSERT INTO metrics 
-                       (printer_id, timestamp, page_count, toner_levels, status, error_state, raw_data) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        printer_id,
-                        metrics.get('timestamp'),
-                        metrics.get('page_count'),
-                        metrics.get('toner_levels'),
-                        metrics.get('status'),
-                        metrics.get('error_state'),
-                        metrics.get('raw_data')
+                errorIndication, errorStatus, errorIndex, varBinds = next(
+                    getCmd(
+                        SnmpEngine(),
+                        CommunityData(community),
+                        UdpTransportTarget((ip, 161), timeout=timeout),
+                        ContextData(),
+                        ObjectType(ObjectIdentity(oid))
                     )
                 )
                 
-                conn.commit()
-                logger.debug(f"Saved metrics for printer ID {printer_id}")
-                return True
+                if not (errorIndication or errorStatus):
+                    for varBind in varBinds:
+                        value = str(varBind[1])
+                        if value != '':
+                            info[key] = value
         except Exception as e:
-            logger.error(f"Error saving metrics: {e}")
-            return False
-
-    def set_printer_serial(self, ip_address, serial_number):
-        """Manually set a printer's serial number"""
+            logger.error(f"Error getting printer info for {ip}: {e}")
+        
+        return info
+    
+    def _update_printer_info(self, printer_id, ip, info):
+        """Update printer information in the database"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
         try:
-            with self.lock, sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
+            # Update fields that we have values for
+            updates = []
+            params = []
+            
+            for field, value in info.items():
+                if value:
+                    updates.append(f"{field} = ?")
+                    params.append(value)
+            
+            if updates:
+                # Add last_seen timestamp
+                updates.append("last_seen = ?")
+                params.append(datetime.now().isoformat())
                 
-                cursor.execute(
-                    "UPDATE printers SET serial_number = ? WHERE ip_address = ?",
-                    (serial_number, ip_address)
+                # Add printer_id
+                params.append(printer_id)
+                
+                query = f"UPDATE printers SET {', '.join(updates)} WHERE id = ?"
+                cursor.execute(query, params)
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Error updating printer info: {e}")
+        finally:
+            conn.close()
+    
+    def _get_printer_metrics(self, ip, community, timeout):
+        """Get printer metrics via SNMP"""
+        metrics = {
+            'timestamp': datetime.now().isoformat(),
+            'raw_data': {}
+        }
+        
+        try:
+            # Get page count
+            errorIndication, errorStatus, errorIndex, varBinds = next(
+                getCmd(
+                    SnmpEngine(),
+                    CommunityData(community),
+                    UdpTransportTarget((ip, 161), timeout=timeout),
+                    ContextData(),
+                    ObjectType(ObjectIdentity('1.3.6.1.2.1.43.10.2.1.4.1.1'))  # prtMarkerLifeCount
+                )
+            )
+            
+            if not (errorIndication or errorStatus):
+                for varBind in varBinds:
+                    metrics['page_count'] = int(varBind[1])
+                    metrics['raw_data']['page_count'] = int(varBind[1])
+            
+            # Get toner levels
+            toner_levels = {}
+            
+            # Walk through the toner entries
+            g = nextCmd(
+                SnmpEngine(),
+                CommunityData(community),
+                UdpTransportTarget((ip, 161), timeout=timeout),
+                ContextData(),
+                ObjectType(ObjectIdentity('1.3.6.1.2.1.43.11.1.1.9')),  # prtMarkerSuppliesLevel
+                lexicographicMode=False
+            )
+            
+            # Get toner names
+            toner_names = {}
+            g_names = nextCmd(
+                SnmpEngine(),
+                CommunityData(community),
+                UdpTransportTarget((ip, 161), timeout=timeout),
+                ContextData(),
+                ObjectType(ObjectIdentity('1.3.6.1.2.1.43.11.1.1.6')),  # prtMarkerSuppliesDescription
+                lexicographicMode=False
+            )
+            
+            for errorIndication, errorStatus, errorIndex, varBinds in g_names:
+                if not (errorIndication or errorStatus):
+                    for varBind in varBinds:
+                        oid = str(varBind[0])
+                        value = str(varBind[1])
+                        # Extract the index from the OID
+                        index = oid.split('.')[-1]
+                        toner_names[index] = value
+            
+            for errorIndication, errorStatus, errorIndex, varBinds in g:
+                if not (errorIndication or errorStatus):
+                    for varBind in varBinds:
+                        oid = str(varBind[0])
+                        value = int(varBind[1])
+                        # Extract the index from the OID
+                        index = oid.split('.')[-1]
+                        
+                        # Get the name if available
+                        name = toner_names.get(index, f"Supply {index}")
+                        
+                        # Only include if it looks like a toner/ink level
+                        if any(keyword in name.lower() for keyword in ['toner', 'ink', 'black', 'cyan', 'magenta', 'yellow']):
+                            toner_levels[name] = value
+            
+            if toner_levels:
+                metrics['toner_levels'] = json.dumps(toner_levels)
+                metrics['raw_data']['toner_levels'] = toner_levels
+            
+            # Get status
+            errorIndication, errorStatus, errorIndex, varBinds = next(
+                getCmd(
+                    SnmpEngine(),
+                    CommunityData(community),
+                    UdpTransportTarget((ip, 161), timeout=timeout),
+                    ContextData(),
+                    ObjectType(ObjectIdentity('1.3.6.1.2.1.25.3.5.1.1.1'))  # hrPrinterStatus
+                )
+            )
+            
+            if not (errorIndication or errorStatus):
+                for varBind in varBinds:
+                    status_code = int(varBind[1])
+                    status_map = {
+                        1: 'other',
+                        2: 'unknown',
+                        3: 'idle',
+                        4: 'printing',
+                        5: 'warmup',
+                        6: 'error'
+                    }
+                    metrics['status'] = status_map.get(status_code, 'unknown')
+                    metrics['raw_data']['status'] = status_map.get(status_code, 'unknown')
+            
+            # Get error state if in error
+            if metrics.get('status') == 'error':
+                errorIndication, errorStatus, errorIndex, varBinds = next(
+                    getCmd(
+                        SnmpEngine(),
+                        CommunityData(community),
+                        UdpTransportTarget((ip, 161), timeout=timeout),
+                        ContextData(),
+                        ObjectType(ObjectIdentity('1.3.6.1.2.1.43.18.1.1.8.1.1'))  # prtAlertDescription
+                    )
                 )
                 
-                if cursor.rowcount > 0:
-                    conn.commit()
-                    logger.info(f"Set serial number {serial_number} for printer {ip_address}")
-                    return True
-                else:
-                    logger.error(f"Printer with IP {ip_address} not found")
-                    return False
+                if not (errorIndication or errorStatus):
+                    for varBind in varBinds:
+                        metrics['error_state'] = str(varBind[1])
+                        metrics['raw_data']['error_state'] = str(varBind[1])
+            
+            metrics['raw_data'] = json.dumps(metrics['raw_data'])
+            return metrics
         except Exception as e:
-            logger.error(f"Error setting serial number: {e}")
-            return False
+            logger.error(f"Error getting printer metrics for {ip}: {e}")
+            return None
     
-    def register_with_server(self):
-        """Register with the central server"""
-        if not self.server:
-            logger.warning("Server integration not available or disabled")
-            return False
-        
-        success = self.server.register()
-        if success:
-            logger.info("Successfully registered with server")
-            return True
-        else:
-            logger.error("Failed to register with server")
-            return False
-    
-    def sync_unregistered_printers(self):
-        """Send any unregistered printers to the server"""
-        if not self.server:
-            logger.warning("Server integration not available or disabled")
-            return False
+    def _add_metrics_to_db(self, printer_id, metrics):
+        """Add metrics to the database"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
         
         try:
-            with self.lock, sqlite3.connect(self.db_path) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                
-                # Get all printers without server_id
-                cursor.execute("SELECT * FROM printers WHERE server_id IS NULL")
-                printers = cursor.fetchall()
-                
-                success_count = 0
-                for printer in printers:
-                    printer_data = {
-                        'ip_address': printer['ip_address'],
-                        'serial_number': printer['serial_number'],
-                        'model': printer['model'],
-                        'name': printer['name']
-                    }
-                    
-                    if self.server.send_printer_data(printer_data):
-                        # Update with the server response when we have integration to get server IDs
-                        # For now, just mark as sent by setting a placeholder server ID
-                        cursor.execute(
-                            "UPDATE printers SET server_id = ? WHERE id = ?",
-                            (1, printer['id'])  # Placeholder ID, will need proper integration
-                        )
-                        conn.commit()
-                        success_count += 1
-                
-                logger.info(f"Synced {success_count} of {len(printers)} printers with server")
-                return success_count > 0
+            cursor.execute(
+                """
+                INSERT INTO metrics 
+                (printer_id, timestamp, page_count, toner_levels, status, error_state, raw_data) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    printer_id,
+                    metrics['timestamp'],
+                    metrics.get('page_count', None),
+                    metrics.get('toner_levels', None),
+                    metrics.get('status', None),
+                    metrics.get('error_state', None),
+                    metrics.get('raw_data', None)
+                )
+            )
+            conn.commit()
+            return cursor.lastrowid
         except Exception as e:
-            logger.error(f"Error syncing printers with server: {e}")
-            return False
+            logger.error(f"Error adding metrics to database: {e}")
+            return None
+        finally:
+            conn.close()
+    
+    def update_config_from_server(self):
+        """Get updated configuration from server"""
+        if not self.server:
+            return
+        
+        try:
+            server_config = self.server.get_config()
+            if server_config:
+                # Update network configuration
+                if 'subnets' in server_config:
+                    self.config['network']['subnets'] = json.dumps(server_config['subnets'])
+                
+                if 'snmp_community' in server_config:
+                    self.config['network']['snmp_community'] = server_config['snmp_community']
+                
+                if 'snmp_timeout' in server_config:
+                    self.config['network']['snmp_timeout'] = str(server_config['snmp_timeout'])
+                
+                # Update polling intervals
+                if 'polling_interval' in server_config:
+                    self.config['agent']['polling_interval'] = str(server_config['polling_interval'])
+                
+                if 'discovery_interval' in server_config:
+                    self.config['agent']['discovery_interval'] = str(server_config['discovery_interval'])
+                
+                # Save updated config
+                with open(self.config_file, 'w') as f:
+                    self.config.write(f)
+                
+                logger.info("Updated configuration from server")
+        except Exception as e:
+            logger.error(f"Error updating configuration from server: {e}")
     
     def run(self):
-        """Run the data collector with scheduled tasks"""
-        logger.info("Starting Printer Data Collector")
+        """Run the agent"""
+        logger.info(f"Starting Printer Monitor Agent (ID: {self.config['agent']['id']})")
         
-        # Try to register with server if enabled
-        if self.config["server"]["enabled"] and SERVER_INTEGRATION_AVAILABLE:
-            self.register_with_server()
+        # Connect to server if enabled
+        if self.server:
+            self.server.register()
+            self.update_config_from_server()
         
-        # Setup schedules
-        schedule.every(self.config['agent']['polling_interval']).seconds.do(self.collect_metrics)
-        schedule.every(self.config['agent']['discovery_interval']).seconds.do(self.discover_printers)
+        # Variables to track when to run discovery and collection
+        last_discovery = 0
+        last_collection = 0
+        last_config_update = 0
         
-        if self.config["server"]["enabled"] and SERVER_INTEGRATION_AVAILABLE:
-            schedule.every(60).seconds.do(self.sync_unregistered_printers)
+        discovery_interval = int(self.config['agent']['discovery_interval'])
+        polling_interval = int(self.config['agent']['polling_interval'])
         
-        # Do an initial discovery
-        self.discover_printers()
+        # Run initial discovery
+        threading.Thread(target=self.discover_printers).start()
+        last_discovery = time.time()
         
-        # Main loop
-        while True:
-            try:
-                schedule.run_pending()
-                time.sleep(1)
-            except KeyboardInterrupt:
-                logger.info("Shutting down")
-                break
-            except Exception as e:
-                logger.error(f"Error in main loop: {e}")
-                time.sleep(5)  # Wait a bit before retrying
+        try:
+            while not self.stop_threads:
+                current_time = time.time()
+                
+                # Check if it's time to run discovery
+                if current_time - last_discovery >= discovery_interval:
+                    threading.Thread(target=self.discover_printers).start()
+                    last_discovery = current_time
+                
+                # Check if it's time to run collection
+                if current_time - last_collection >= polling_interval:
+                    threading.Thread(target=self.collect_metrics).start()
+                    last_collection = current_time
+                
+                # Check if it's time to update config (every hour)
+                if self.server and current_time - last_config_update >= 3600:
+                    self.update_config_from_server()
+                    
+                    # Update intervals from config
+                    discovery_interval = int(self.config['agent']['discovery_interval'])
+                    polling_interval = int(self.config['agent']['polling_interval'])
+                    
+                    last_config_update = current_time
+                
+                # Sleep for a bit
+                time.sleep(10)
+        except KeyboardInterrupt:
+            logger.info("Stopping agent due to keyboard interrupt")
+        finally:
+            logger.info("Agent stopped")
+    
+    def stop(self):
+        """Stop the agent"""
+        self.stop_threads = True
+        logger.info("Stopping agent...")
 
-def main():
-    """Main entry point"""
-    parser = argparse.ArgumentParser(description="Printer SNMP Data Collector")
-    parser.add_argument("--config", default="config.ini", help="Path to config file")
-    parser.add_argument("--discover", action="store_true", help="Run printer discovery")
-    parser.add_argument("--collect", action="store_true", help="Collect metrics once")
-    parser.add_argument("--set-serial", nargs=2, metavar=("IP", "SERIAL"), help="Set printer serial number")
-    parser.add_argument("--register", action="store_true", help="Register agent with server")
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Printer Monitor Agent')
+    parser.add_argument('--discover', action='store_true', help='Run printer discovery')
+    parser.add_argument('--collect', action='store_true', help='Run metrics collection')
+    parser.add_argument('--config', default='config.ini', help='Path to config file')
     
     args = parser.parse_args()
     
-    collector = PrinterCollector(config_file=args.config)
+    agent = PrinterMonitorAgent(args.config)
     
     if args.discover:
-        collector.discover_printers()
+        agent.discover_printers()
     elif args.collect:
-        collector.collect_metrics()
-    elif args.set_serial:
-        collector.set_printer_serial(args.set_serial[0], args.set_serial[1])
-    elif args.register:
-        collector.register_with_server()
+        agent.collect_metrics()
     else:
-        collector.run()  # Run as service
-
-if __name__ == "__main__":
-    main()
+        try:
+            agent.run()
+        except KeyboardInterrupt:
+            agent.stop()

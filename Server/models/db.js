@@ -21,7 +21,10 @@ async function initializeDatabase() {
         username VARCHAR(50) UNIQUE NOT NULL,
         password VARCHAR(100) NOT NULL,
         email VARCHAR(100) UNIQUE NOT NULL,
+        first_name VARCHAR(50),
+        last_name VARCHAR(50),
         role VARCHAR(20) NOT NULL DEFAULT 'user',
+        is_active BOOLEAN DEFAULT TRUE,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         last_login TIMESTAMP WITH TIME ZONE
       );
@@ -43,11 +46,14 @@ async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS printers (
         id SERIAL PRIMARY KEY,
         agent_id INTEGER REFERENCES agents(id) ON DELETE CASCADE,
+        organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
         ip_address VARCHAR(50) NOT NULL,
         serial_number VARCHAR(100),
         model VARCHAR(100),
         name VARCHAR(100),
         status VARCHAR(50) DEFAULT 'unknown',
+        location VARCHAR(100),
+        department VARCHAR(100),
         last_seen TIMESTAMP WITH TIME ZONE,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(agent_id, ip_address)
@@ -69,7 +75,23 @@ async function initializeDatabase() {
         name VARCHAR(100) UNIQUE NOT NULL,
         contact_name VARCHAR(100),
         contact_email VARCHAR(100),
+        phone VARCHAR(50),
+        address VARCHAR(255),
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      
+      CREATE TABLE IF NOT EXISTS agent_configs (
+        id SERIAL PRIMARY KEY,
+        agent_id INTEGER REFERENCES agents(id) ON DELETE CASCADE,
+        organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+        subnet_ranges JSONB NOT NULL DEFAULT '[]',
+        snmp_community VARCHAR(50) DEFAULT 'public',
+        snmp_timeout INTEGER DEFAULT 2,
+        polling_interval INTEGER DEFAULT 300,
+        discovery_interval INTEGER DEFAULT 86400,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(agent_id)
       );
 
       CREATE TABLE IF NOT EXISTS organization_users (

@@ -273,7 +273,7 @@ class ServerIntegration:
             }
             
             response = requests.get(
-                f"{self.server_url}/api/data/config",
+                f"{self.server_url}/api/agents/config/{self.agent_id}",
                 headers=headers,
                 timeout=10
             )
@@ -289,3 +289,7 @@ class ServerIntegration:
         except Exception as e:
             logger.error(f"Error getting server config: {e}")
             return None
+            
+    def get_config(self):
+        """Alias for get_server_config for compatibility"""
+        return self.get_server_config()
