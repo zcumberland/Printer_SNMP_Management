@@ -118,7 +118,7 @@ install_dependencies() {
 install_dependencies
 
 # Navigate to server directory
-cd "$(dirname "$0")/../Server"
+cd "$(dirname "$0")/../../Server"
 SERVER_DIR=$(pwd)
 echo "Setting up server in: $SERVER_DIR"
 
