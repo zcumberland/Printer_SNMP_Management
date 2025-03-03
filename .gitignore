@@ -1,0 +1,63 @@
+# Node.js / NPM
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+yarn.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+.env
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Docker
+.dockerignore
+
+# Agent
+Agent/data/
+Agent/*.log
+Agent/agent_id.txt
+Agent/agent_key.txt
+
+# Server
+Server/logs/
+Server/.env
+
+# Frontend
+FrontEnd/build/
+FrontEnd/coverage/
+FrontEnd/node_modules/
+
+# Other
+*.log
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
